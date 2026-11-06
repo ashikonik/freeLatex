@@ -10,6 +10,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { loadEnv } from './config/env.js';
+import { openDatabase } from './db/index.js';
+import { users } from './db/schema.js';
+import { hashSecret } from './utils/hash.js';
 
 async function main(): Promise<void> {
   const dataDir = await mkdtemp(join(tmpdir(), 'freelatex-probe-'));
@@ -34,6 +37,22 @@ async function main(): Promise<void> {
     const content = await readFile(join(dataDir, '.probe'), 'utf8');
     if (content !== 'ok') {
       throw new Error('probe: data directory is not writable');
+    }
+
+    // The database must open, create its schema, and accept a write.
+    const handle = openDatabase(dataDir);
+    try {
+      handle.db
+        .insert(users)
+        .values({ id: 'probe_user', apiKeyHash: hashSecret('probe'), name: 'Probe' })
+        .run();
+
+      const rows = handle.db.select().from(users).all();
+      if (rows.length !== 1) {
+        throw new Error('probe: user insert did not persist');
+      }
+    } finally {
+      handle.close();
     }
 
     console.log(`probe OK — authMode=${env.authMode} port=${env.port} dataDir=${env.dataDir}`);
