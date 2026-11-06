@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+#
+# dev-rollback.sh — Revert the repository to the previous verified checkpoint.
+#
+# Usage: ./scripts/dev-rollback.sh <step_number>
+#
+# Resets the working tree and HEAD to checkpoint-step-<N-1>, discarding any
+# uncommitted changes made after that checkpoint.
+
+set -euo pipefail
+
+STEP="${1:-}"
+if [[ ! "$STEP" =~ ^[0-9]+$ ]]; then
+  echo "usage: $0 <step_number>" >&2
+  exit 2
+fi
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+if [[ "$STEP" -le 0 ]]; then
+  echo "Step 0 has no earlier checkpoint; nothing to roll back to." >&2
+  exit 2
+fi
+
+PREV=$(printf '%02d' $((STEP - 1)))
+TARGET="checkpoint-step-${PREV}"
+
+if ! git rev-parse "$TARGET" >/dev/null 2>&1; then
+  echo "Checkpoint '$TARGET' not found. Available checkpoints:" >&2
+  git tag -l 'checkpoint-step-*' >&2
+  exit 1
+fi
+
+echo "Rolling back to $TARGET ($(git rev-parse --short "$TARGET"))..."
+echo ""
+
+# Uncommitted work is discarded — that is the point of a rollback.
+git reset --hard "$TARGET"
+git clean -fd --exclude=.dev_logs
+
+echo ""
+echo "Rolled back to $TARGET."
+echo "Current HEAD: $(git log -1 --oneline)"
