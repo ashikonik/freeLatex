@@ -22,7 +22,11 @@ interface ListKeysReply {
  * from the request body (or the Authorization header) and validates it itself
  * rather than relying on the `requireAuth` hook.
  */
-export async function loginRoutes(app: FastifyInstance, context: AuthContext): Promise<void> {
+export async function loginRoutes(
+  app: FastifyInstance,
+  options: { context: AuthContext },
+): Promise<void> {
+  const { context } = options;
   app.post('/api/auth/login', async (request, reply) => {
     const body = request.body as { apiKey?: string } | undefined;
     const apiKey = body?.apiKey?.trim() || parseBearer(request.headers.authorization);
@@ -49,7 +53,11 @@ export async function loginRoutes(app: FastifyInstance, context: AuthContext): P
  *
  * These sit behind the `requireAuth` hook — the caller is already known.
  */
-export async function authRoutes(app: FastifyInstance, context: AuthContext): Promise<void> {
+export async function authRoutes(
+  app: FastifyInstance,
+  options: { context: AuthContext },
+): Promise<void> {
+  const { context } = options;
   /** Return the authenticated caller's identity. */
   app.get('/api/auth/me', async (request, reply) => {
     const identity = request.identity;

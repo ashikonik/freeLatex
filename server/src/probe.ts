@@ -77,6 +77,57 @@ async function main(): Promise<void> {
         if (login.statusCode !== 200) {
           throw new Error(`probe: admin login returned ${login.statusCode}`);
         }
+
+        // Step 4: create a project, upload a .tex file, and download the
+        // exported zip. This exercises the storage service end to end.
+        const auth = { authorization: `Bearer ${env.adminApiKey}` };
+
+        const created = await app.inject({
+          method: 'POST',
+          url: '/api/projects',
+          headers: auth,
+          payload: { title: 'Probe Project' },
+        });
+        if (created.statusCode !== 201) {
+          throw new Error(`probe: project creation returned ${created.statusCode}`);
+        }
+        const projectId = created.json().id as string;
+
+        const uploaded = await app.inject({
+          method: 'PUT',
+          url: `/api/projects/${projectId}/files/main.tex`,
+          headers: auth,
+          payload: { content: '\\documentclass{article}\n\\begin{document}\nHi\n\\end{document}\n' },
+        });
+        if (uploaded.statusCode !== 200) {
+          throw new Error(`probe: file upload returned ${uploaded.statusCode}`);
+        }
+
+        const exported = await app.inject({
+          method: 'GET',
+          url: `/api/projects/${projectId}/export`,
+          headers: auth,
+        });
+        if (exported.statusCode !== 200) {
+          throw new Error(`probe: zip export returned ${exported.statusCode}`);
+        }
+        if (exported.rawPayload.subarray(0, 4).toString('hex') !== '504b0304') {
+          throw new Error('probe: exported archive is not a zip file');
+        }
+
+        // The exported archive must import back as a project.
+        const imported = await app.inject({
+          method: 'POST',
+          url: '/api/projects/import',
+          headers: auth,
+          payload: { buffer: exported.rawPayload, title: 'Probe Import' },
+        });
+        if (imported.statusCode !== 201) {
+          throw new Error(`probe: zip import returned ${imported.statusCode}`);
+        }
+        if ((imported.json().importedFiles as number) < 1) {
+          throw new Error('probe: zip import extracted no files');
+        }
       } finally {
         await app.close();
       }

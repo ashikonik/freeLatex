@@ -26,7 +26,11 @@ const MAX_SHARE_TOKENS_PER_PROJECT = 100;
  * Every route is owner-only. A share token cannot mint further share tokens —
  * that would let a guest chain their way to the owner's whole workspace.
  */
-export async function shareRoutes(app: FastifyInstance, context: AuthContext): Promise<void> {
+export async function shareRoutes(
+  app: FastifyInstance,
+  options: { context: AuthContext },
+): Promise<void> {
+  const { context } = options;
   /**
    * Create a share token for a project.
    *

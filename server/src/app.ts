@@ -1,12 +1,16 @@
 import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
+import multipart from '@fastify/multipart';
 
 import { loadEnv, type Env } from './config/env.js';
 import { openDatabase, type DbHandle } from './db/index.js';
 import { requireAuth } from './middleware/auth.js';
 import { authRoutes, loginRoutes } from './routes/auth.js';
+import { projectRoutes } from './routes/projects.js';
 import { shareRoutes } from './routes/share.js';
+import { ProjectStorage } from './services/storage.js';
+import { join } from 'node:path';
 
 export interface AppOptions {
   env?: Env;
@@ -44,12 +48,20 @@ export async function buildApp(options: AppOptions = {}): Promise<BuiltApp> {
       maxPayload: 5 * 1024 * 1024,
     },
   });
+  await app.register(multipart, {
+    limits: {
+      fileSize: 200 * 1024 * 1024,
+      files: 1,
+    },
+  });
 
   const context = {
     db: db.db,
     authMode: env.authMode,
     adminApiKey: env.adminApiKey,
   };
+
+  const storage = new ProjectStorage(join(env.dataDir, 'projects'));
 
   app.get('/api/health', async () => ({
     status: 'ok',
@@ -60,15 +72,16 @@ export async function buildApp(options: AppOptions = {}): Promise<BuiltApp> {
   // /api/auth/login is registered OUTSIDE the guarded scope below: it is the
   // endpoint that *establishes* credentials, so it receives the API key in the
   // request body and validates it itself.
-  await app.register(loginRoutes, context);
+  await app.register(loginRoutes, { context });
 
   // Every other /api route requires credentials. Share tokens are accepted on
   // the project-scoped routes; the guard picks whichever is present.
   await app.register(async (scoped) => {
     scoped.addHook('onRequest', requireAuth(context));
 
-    await scoped.register(authRoutes, context);
-    await scoped.register(shareRoutes, context);
+    await scoped.register(authRoutes, { context });
+    await scoped.register(shareRoutes, { context });
+    await scoped.register(projectRoutes, { context, storage });
   });
 
   app.setErrorHandler((error: FastifyError, request, reply) => {
