@@ -24,10 +24,12 @@ if [[ "$STEP" -le 0 ]]; then
 fi
 
 PREV=$(printf '%02d' $((STEP - 1)))
-TARGET="checkpoint-step-${PREV}"
 
-if ! git rev-parse "$TARGET" >/dev/null 2>&1; then
-  echo "Checkpoint '$TARGET' not found. Available checkpoints:" >&2
+# Checkpoint tags may carry a descriptive slug suffix (e.g. checkpoint-step-00-git-init).
+TARGET=$(git tag -l "checkpoint-step-${PREV}*" --sort=creatordate | tail -n 1)
+
+if [[ -z "$TARGET" ]]; then
+  echo "No checkpoint found for step ${PREV}. Available checkpoints:" >&2
   git tag -l 'checkpoint-step-*' >&2
   exit 1
 fi

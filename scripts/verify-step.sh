@@ -30,6 +30,8 @@ PATCH_FILE="$LOG_DIR/step_${STEP}.patch"
 mkdir -p "$LOG_DIR"
 
 STEP_PADDED="$(printf '%02d' "$STEP")"
+# Optional slug suffix for the checkpoint tag, e.g. STEP_SLUG=git-init
+STEP_SLUG="${STEP_SLUG:-}"
 
 exec > >(tee "$LOG_FILE") 2>&1
 
@@ -112,7 +114,7 @@ Co-Authored-By: Opus 4.8 <noreply@puku.sh>"
     echo "Nothing to commit (working tree clean)."
   fi
 
-  TAG="checkpoint-step-${STEP_PADDED}"
+  TAG="checkpoint-step-${STEP_PADDED}-${STEP_SLUG:-untagged}"
   git tag -f "$TAG" -m "Checkpoint for step ${STEP_PADDED}" >/dev/null 2>&1 || true
   echo "Tagged: $TAG"
   exit 0
