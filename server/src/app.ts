@@ -9,7 +9,9 @@ import { requireAuth } from './middleware/auth.js';
 import { authRoutes, loginRoutes } from './routes/auth.js';
 import { projectRoutes } from './routes/projects.js';
 import { shareRoutes } from './routes/share.js';
+import { snapshotRoutes } from './routes/snapshots.js';
 import { ProjectStorage } from './services/storage.js';
+import { SnapshotService } from './services/snapshot.js';
 import { join } from 'node:path';
 
 export interface AppOptions {
@@ -62,6 +64,7 @@ export async function buildApp(options: AppOptions = {}): Promise<BuiltApp> {
   };
 
   const storage = new ProjectStorage(join(env.dataDir, 'projects'));
+  const snapshots = new SnapshotService(db.db, storage);
 
   app.get('/api/health', async () => ({
     status: 'ok',
@@ -82,6 +85,7 @@ export async function buildApp(options: AppOptions = {}): Promise<BuiltApp> {
     await scoped.register(authRoutes, { context });
     await scoped.register(shareRoutes, { context });
     await scoped.register(projectRoutes, { context, storage });
+    await scoped.register(snapshotRoutes, { context, snapshots });
   });
 
   app.setErrorHandler((error: FastifyError, request, reply) => {

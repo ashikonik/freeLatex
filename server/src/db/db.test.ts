@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { openDatabase, type DbHandle } from './index.js';
 import { projectSnapshots, projects, shareTokens, users } from './schema.js';
@@ -29,12 +32,18 @@ describe('users', () => {
   });
 
   it('defaults role to user and records createdAt', () => {
+    const before = Date.now();
     handle.db.insert(users).values({ id: 'usr_2', apiKeyHash: 'hash2', name: 'Bob' }).run();
 
     const found = handle.db.select().from(users).where(eq(users.id, 'usr_2')).get();
 
     expect(found?.role).toBe('user');
     expect(found?.createdAt).toBeInstanceOf(Date);
+    // The default is applied by the driver, so the read path must interpret
+    // the stored unit the same way the write path produced it. A mismatch
+    // shows up as a date thousands of years away.
+    expect(found!.createdAt.getTime()).toBeGreaterThanOrEqual(before - 1000);
+    expect(found!.createdAt.getTime()).toBeLessThanOrEqual(Date.now() + 1000);
   });
 
   it('rejects a duplicate api_key_hash', () => {
@@ -60,6 +69,71 @@ describe('users', () => {
     handle.db.delete(users).where(eq(users.id, 'usr_4')).run();
 
     expect(handle.db.select().from(users).where(eq(users.id, 'usr_4')).get()).toBeUndefined();
+  });
+});
+
+describe('timestamp units', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'freelatex-timestamps-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('stores and reads a timestamp as milliseconds', () => {
+    // The schema previously used Drizzle's `timestamp` mode, which *reads* a
+    // column as seconds while `defaultNow()` writes milliseconds. The stored
+    // value was always milliseconds; only the read was wrong, so the fix
+    // changes the interpretation without touching the data.
+    const before = Date.now();
+
+    const handle = openDatabase(dir);
+    try {
+      handle.db
+        .insert(users)
+        .values({ id: 'usr_ms', apiKeyHash: 'ms-hash', name: 'Ms' })
+        .run();
+
+      const raw = handle.sqlite.prepare('SELECT created_at FROM users WHERE id = ?').get('usr_ms');
+      const stored = (raw as { created_at: number }).created_at;
+
+      // 13 digits: a millisecond timestamp, not a second one.
+      expect(stored).toBeGreaterThan(1_600_000_000_000);
+      expect(stored).toBeLessThanOrEqual(Date.now() + 1000);
+
+      const row = handle.db.select().from(users).where(eq(users.id, 'usr_ms')).get();
+      expect(row!.createdAt.getTime()).toBeGreaterThanOrEqual(before - 1000);
+      expect(row!.createdAt.getTime()).toBeLessThanOrEqual(Date.now() + 1000);
+    } finally {
+      handle.close();
+    }
+  });
+
+  it('reads a timestamp written by an older build correctly', () => {
+    // A database written before the fix holds a millisecond value in the
+    // column. Re-opening it must read that value back as the right instant,
+    // not as a date thousands of years in the future.
+    const legacy = Date.now();
+
+    const first = openDatabase(dir);
+    first.sqlite
+      .prepare(
+        'INSERT INTO users (id, api_key_hash, name, role, created_at) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run('usr_legacy', 'legacy-hash', 'Legacy', 'user', legacy);
+    first.close();
+
+    const second = openDatabase(dir);
+    try {
+      const row = second.db.select().from(users).where(eq(users.id, 'usr_legacy')).get();
+      expect(row!.createdAt.getTime()).toBeGreaterThanOrEqual(legacy - 1000);
+      expect(row!.createdAt.getTime()).toBeLessThanOrEqual(Date.now() + 1000);
+    } finally {
+      second.close();
+    }
   });
 });
 

@@ -213,13 +213,42 @@ describe('ProjectStorage', () => {
 
     const all = await storage.readAllFiles('prj_1');
 
-    expect(all['a.tex']).toBe('A');
-    expect(Object.keys(all)).toContain('main.tex');
+    expect(all.text['a.tex']).toBe('A');
+    expect(Object.keys(all.text)).toContain('main.tex');
+  });
+
+  it('keeps binary files byte-for-byte through a snapshot round trip', async () => {
+    await storage.createProject('prj_1');
+    // A real PNG header: invalid UTF-8, so a naive text read would corrupt it.
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01, 0x02, 0x03]);
+    const absolute = join(root, 'projects', 'prj_1', 'image.png');
+    await writeFile(absolute, png);
+
+    const all = await storage.readAllFiles('prj_1');
+
+    expect(all.binary['image.png']).toBe(png.toString('base64'));
+    expect(all.text['image.png']).toBeUndefined();
+
+    await storage.writeAllFiles('prj_1', all);
+    expect(await readFile(absolute)).toEqual(png);
+  });
+
+  it('refuses to snapshot a file that is too large', async () => {
+    await storage.createProject('prj_1');
+    // Over the per-file limit. The snapshot must fail rather than silently
+    // omit the file: an incomplete snapshot would delete the file on rollback.
+    const oversized = Buffer.alloc(21 * 1024 * 1024, 0x41);
+    await writeFile(join(root, 'projects', 'prj_1', 'huge.tex'), oversized);
+
+    await expect(storage.readAllFiles('prj_1')).rejects.toThrow(/too large/i);
   });
 
   it('writes all files at once', async () => {
     await storage.createProject('prj_1');
-    await storage.writeAllFiles('prj_1', { 'x.tex': 'X', 'deep/y.tex': 'Y' });
+    await storage.writeAllFiles('prj_1', {
+      text: { 'x.tex': 'X', 'deep/y.tex': 'Y' },
+      binary: {},
+    });
 
     expect(await storage.readProjectFile('prj_1', 'x.tex')).toBe('X');
     expect(await storage.readProjectFile('prj_1', 'deep/y.tex')).toBe('Y');
@@ -230,6 +259,14 @@ describe('ProjectStorage', () => {
     await storage.deleteProject('prj_1');
 
     expect(await storage.exists('prj_1', 'main.tex')).toBe(false);
+  });
+
+  it('treats a project without a directory on disk as empty', async () => {
+    // A database row can exist without files on disk — for example a project
+    // whose directory was removed. Listing must not fail with ENOENT.
+    await expect(storage.listProjectFiles('prj_missing')).resolves.toEqual([]);
+    await expect(storage.readAllFiles('prj_missing')).resolves.toEqual({ text: {}, binary: {} });
+    await expect(storage.buildFileTree('prj_missing')).resolves.toEqual([]);
   });
 });
 

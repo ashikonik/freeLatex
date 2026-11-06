@@ -1,4 +1,5 @@
 import { createWriteStream } from 'node:fs';
+import type { Dirent } from 'node:fs';
 import {
   mkdir,
   readdir,
@@ -31,6 +32,46 @@ import {
  */
 function decodeEntryName(fileName: string | Buffer): string {
   return Buffer.isBuffer(fileName) ? fileName.toString('utf8') : fileName;
+}
+
+/**
+ * Raised when a project is too large to be captured in one snapshot.
+ *
+ * A dedicated type so the route can answer 413 rather than a generic 500,
+ * and so the failure is never mistaken for "the file could not be read".
+ */
+export class ProjectTooLargeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProjectTooLargeError';
+  }
+}
+
+/**
+ * True when an error is "the path does not exist".
+ *
+ * Node reports this as an `ENOENT` error code; the check is on the code
+ * rather than the message so it does not depend on the platform's wording.
+ */
+function isNotFound(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as NodeJS.ErrnoException).code === 'ENOENT'
+  );
+}
+
+/**
+ * True when a buffer holds content that is not valid UTF-8 text.
+ *
+ * Node's UTF-8 decoder replaces invalid byte sequences with U+FFFD instead
+ * of throwing, so a binary file silently comes back as mojibake. Round-tripping
+ * the decoded text back to bytes and comparing with the original detects that
+ * loss: a valid text file always survives the round trip unchanged.
+ */
+export function isBinaryContent(buffer: Buffer): boolean {
+  const decoded = buffer.toString('utf8');
+  return !Buffer.from(decoded, 'utf8').equals(buffer);
 }
 
 export interface FileEntry {
@@ -124,13 +165,28 @@ export class ProjectStorage {
    *
    * Results are sorted by path so callers get a stable order — snapshots and
    * diffs depend on that.
+   *
+   * A project row can exist in the database without a directory on disk (a
+   * project whose files were removed, or one whose directory was never
+   * created). Such a project simply has no files, so a missing directory
+   * yields an empty list rather than an error.
    */
   async listProjectFiles(projectId: string): Promise<FileEntry[]> {
     const dir = this.projectDir(projectId);
     const entries: FileEntry[] = [];
 
     const walk = async (current: string): Promise<void> => {
-      const items = await readdir(current, { withFileTypes: true });
+      let items: Dirent[];
+      try {
+        items = await readdir(current, { withFileTypes: true });
+      } catch (error) {
+        // A missing directory means the project has no files. Anything else
+        // (permissions, I/O errors) is a real failure and must surface.
+        if (isNotFound(error)) {
+          return;
+        }
+        throw error;
+      }
       for (const item of items) {
         const absolute = join(current, item.name);
         const relPath = toPosixPath(relative(dir, absolute));
@@ -162,7 +218,6 @@ export class ProjectStorage {
     entries.sort((a, b) => a.path.localeCompare(b.path));
     return entries;
   }
-
   /**
    * Build a nested file tree from the flat entry list.
    */
@@ -239,21 +294,34 @@ export class ProjectStorage {
   }
 
   /**
-   * Read every text file in a project into a path -> content map.
+   * Read every file in a project into a text map and a binary map.
    *
-   * This is the snapshot format. Binary files are skipped rather than
-   * corrupted, since LaTeX sources are text.
+   * This is the snapshot format. Text files hold their content verbatim;
+   * binary files hold base64 so they survive a round trip byte-for-byte.
+   * Node's UTF-8 decoder silently substitutes U+FFFD for invalid bytes, so
+   * binary content has to be detected and encoded rather than decoded.
+   *
+   * @throws Error when the project's total size exceeds the snapshot limit.
    */
-  async readAllFiles(projectId: string): Promise<Record<string, string>> {
+  async readAllFiles(projectId: string): Promise<{
+    text: Record<string, string>;
+    binary: Record<string, string>;
+  }> {
     const entries = await this.listProjectFiles(projectId);
-    const result: Record<string, string> = {};
+    const text: Record<string, string> = {};
+    const binary: Record<string, string> = {};
+    let totalBytes = 0;
 
     for (const entry of entries) {
       if (entry.type !== 'file') {
         continue;
       }
+
+      let buffer: Buffer;
       try {
-        result[entry.path] = await this.readProjectFile(projectId, entry.path);
+        const absolute = resolveWithin(this.projectDir(projectId), entry.path);
+        await assertRealPathWithin(this.projectDir(projectId), absolute);
+        buffer = await readFile(absolute);
       } catch (error) {
         // A path-safety failure must not be silently swallowed: it means the
         // project contains something that does not belong to it, and the
@@ -261,35 +329,65 @@ export class ProjectStorage {
         if (error instanceof PathEscapeError) {
           throw error;
         }
-        // Skip files that cannot be read as text (binary assets).
+        // Skip files that cannot be read (locked, vanished, or unreadable).
+        continue;
+      }
+
+      // The size check sits outside the read's try/catch on purpose: a file
+      // that is too large has to fail the whole snapshot. Silently omitting
+      // it would produce a snapshot that looks complete but loses the file —
+      // and a later rollback to it would delete the file for good.
+      if (buffer.length > MAX_FILE_BYTES) {
+        throw new ProjectTooLargeError(`"${entry.path}" is too large to snapshot.`);
+      }
+      totalBytes += buffer.length;
+      if (totalBytes > MAX_TOTAL_BYTES) {
+        throw new ProjectTooLargeError('The project is too large to snapshot.');
+      }
+
+      if (isBinaryContent(buffer)) {
+        binary[entry.path] = buffer.toString('base64');
+      } else {
+        text[entry.path] = buffer.toString('utf8');
       }
     }
 
-    return result;
+    return { text, binary };
   }
 
   /**
    * Write a complete set of files into a project, replacing what is there.
    *
    * Used by snapshot rollback and zip import. Files present in the project
-   * but absent from `files` are deleted, so the result matches `files`
-   * exactly rather than being a merge.
+   * but absent from the new set are deleted, so the result matches the given
+   * files exactly rather than being a merge.
    */
-  async writeAllFiles(projectId: string, files: Record<string, string>): Promise<void> {
+  async writeAllFiles(
+    projectId: string,
+    files: { text: Record<string, string>; binary: Record<string, string> },
+  ): Promise<void> {
     const dir = this.projectDir(projectId);
     await mkdir(dir, { recursive: true });
 
-    for (const [relativePath, content] of Object.entries(files)) {
+    for (const [relativePath, content] of Object.entries(files.text)) {
       const absolute = resolveWithin(dir, relativePath);
       await assertRealPathWithin(dir, absolute);
       await mkdir(dirname(absolute), { recursive: true });
       await writeFile(absolute, content, 'utf8');
     }
 
+    for (const [relativePath, content] of Object.entries(files.binary)) {
+      const absolute = resolveWithin(dir, relativePath);
+      await assertRealPathWithin(dir, absolute);
+      await mkdir(dirname(absolute), { recursive: true });
+      await writeFile(absolute, Buffer.from(content, 'base64'));
+    }
+
     // Remove anything that the new file set does not mention.
+    const keep = new Set([...Object.keys(files.text), ...Object.keys(files.binary)]);
     const existing = await this.listProjectFiles(projectId);
     for (const entry of existing) {
-      if (entry.type === 'file' && !(entry.path in files)) {
+      if (entry.type === 'file' && !keep.has(entry.path)) {
         await this.deleteProjectFile(projectId, entry.path);
       }
     }

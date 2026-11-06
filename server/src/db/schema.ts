@@ -12,7 +12,7 @@ export const users = sqliteTable(
     role: text('role', { enum: ['admin', 'user'] })
       .notNull()
       .default('user'),
-    createdAt: integer('created_at', { mode: 'timestamp' })
+    createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
       .defaultNow(),
   },
@@ -29,10 +29,10 @@ export const projects = sqliteTable(
     title: text('title').notNull(),
     /** Path of the main TeX file relative to the project root, e.g. "main.tex". */
     mainFile: text('main_file').notNull().default('main.tex'),
-    createdAt: integer('created_at', { mode: 'timestamp' })
+    createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
       .defaultNow(),
-    updatedAt: integer('updated_at', { mode: 'timestamp' })
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
       .notNull()
       .defaultNow(),
   },
@@ -53,11 +53,11 @@ export const shareTokens = sqliteTable(
       .notNull()
       .default('ro'),
     label: text('label'),
-    createdAt: integer('created_at', { mode: 'timestamp' })
+    createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
       .defaultNow(),
     /** Unix ms timestamp; null means the token never expires. */
-    expiresAt: integer('expires_at', { mode: 'timestamp' }),
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }),
   },
   (table) => [
     uniqueIndex('share_tokens_token_hash_idx').on(table.tokenHash),
@@ -78,7 +78,7 @@ export const projectSnapshots = sqliteTable(
     /** SHA-256 of the snapshot payload, used to detect identical snapshots. */
     hash: text('hash').notNull(),
     createdBy: text('created_by'),
-    createdAt: integer('created_at', { mode: 'timestamp' })
+    createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()
       .defaultNow(),
   },

@@ -128,6 +128,56 @@ async function main(): Promise<void> {
         if ((imported.json().importedFiles as number) < 1) {
           throw new Error('probe: zip import extracted no files');
         }
+
+        // Step 5: capture a snapshot, change a file, and diff the two
+        // revisions. This checks the diff engine's runtime output format.
+        const snapshotted = await app.inject({
+          method: 'POST',
+          url: `/api/projects/${projectId}/snapshots`,
+          headers: auth,
+          payload: { label: 'Probe Snapshot' },
+        });
+        if (snapshotted.statusCode !== 201) {
+          throw new Error(`probe: snapshot creation returned ${snapshotted.statusCode}`);
+        }
+        const snapshotId = snapshotted.json().id as string;
+
+        await app.inject({
+          method: 'PUT',
+          url: `/api/projects/${projectId}/files/main.tex`,
+          headers: auth,
+          payload: { content: '\\documentclass{article}\n\\begin{document}\nHi\nAgain\n\\end{document}\n' },
+        });
+
+        const second = await app.inject({
+          method: 'POST',
+          url: `/api/projects/${projectId}/snapshots`,
+          headers: auth,
+          payload: { label: 'Probe Snapshot 2' },
+        });
+        if (second.statusCode !== 201) {
+          throw new Error(`probe: second snapshot returned ${second.statusCode}`);
+        }
+
+        const diffed = await app.inject({
+          method: 'GET',
+          url: `/api/projects/${projectId}/snapshots/${snapshotId}/diff`,
+          headers: auth,
+          query: { against: second.json().id },
+        });
+        if (diffed.statusCode !== 200) {
+          throw new Error(`probe: snapshot diff returned ${diffed.statusCode}`);
+        }
+        const diffs = diffed.json().diffs as { path: string; changeType: string; patch: string }[];
+        if (diffs.length !== 1) {
+          throw new Error(`probe: expected 1 diff, got ${diffs.length}`);
+        }
+        if (diffs[0]?.path !== 'main.tex' || diffs[0]?.changeType !== 'modified') {
+          throw new Error('probe: diff did not report main.tex as modified');
+        }
+        if (!diffs[0]?.patch.includes('+Again')) {
+          throw new Error('probe: diff patch is missing the added line');
+        }
       } finally {
         await app.close();
       }
