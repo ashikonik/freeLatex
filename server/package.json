@@ -1,0 +1,54 @@
+{
+  "name": "freelatex-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "freeLatex backend — Fastify + TypeScript + Yjs + Tectonic",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "probe": "tsx src/probe.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.4.1",
+    "@fastify/multipart": "^10.1.8",
+    "@fastify/static": "^10.1.10",
+    "@fastify/websocket": "^11.3.7",
+    "archiver": "^8.0.0",
+    "better-sqlite3": "^13.0.3",
+    "diff": "^9.0.0",
+    "dotenv": "^18.0.9",
+    "drizzle-orm": "^0.45.4",
+    "fastify": "^5.12.8",
+    "nanoid": "^6.0.2",
+    "ws": "^8.18.3",
+    "yauzl": "^3.4.0",
+    "y-protocols": "^1.0.6",
+    "y-websocket": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/archiver": "^6.0.3",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/diff": "^8.0.0",
+    "@types/node": "^24.10.1",
+    "@types/ws": "^8.18.1",
+    "@types/yauzl": "^2.10.3",
+    "drizzle-kit": "^0.31.11",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.0"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.3": true
+  }
+}

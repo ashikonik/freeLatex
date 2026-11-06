@@ -48,7 +48,7 @@ HEAD3_FAILED=0
 echo ""
 echo "--- Head 1: Vitest unit & integration tests ---"
 if [[ -d server/node_modules ]]; then
-  if (cd server && npx vitest run --reporter=basic); then
+  if (cd server && npx vitest run --reporter=dot); then
     echo "HEAD 1 PASS"
   else
     echo "HEAD 1 FAIL"
@@ -77,8 +77,8 @@ fi
 # ---------------------------------------------------------------- Head 3
 echo ""
 echo "--- Head 3: Runtime functional probe ---"
-if [[ -d server/node_modules ]] && [[ -f server/src/index.ts ]]; then
-  if (cd server && npm run --silent probe 2>/dev/null || node --experimental-strip-types --no-warnings src/probe.ts 2>/dev/null); then
+if [[ -d server/node_modules ]] && [[ -f server/src/probe.ts ]]; then
+  if (cd server && npm run --silent probe); then
     echo "HEAD 3 PASS"
   else
     echo "HEAD 3 FAIL"
