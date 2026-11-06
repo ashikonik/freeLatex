@@ -6,6 +6,7 @@ import { canAccessProject } from '../auth/authorize.js';
 import { projects, users } from '../db/schema.js';
 import { hashSecret } from '../utils/hash.js';
 import { ProjectStorage, newProjectId } from '../services/storage.js';
+import { PathEscapeError } from '../services/paths.js';
 
 interface CreateProjectBody {
   title?: string;
@@ -205,8 +206,11 @@ export async function projectRoutes(
       const content = await storage.readProjectFile(id, relativePath);
       return reply.send({ path: relativePath, content });
     } catch (error) {
+      if (error instanceof PathEscapeError) {
+        return reply.status(400).send({ error: error.message });
+      }
       const message = error instanceof Error ? error.message : 'Could not read the file.';
-      return reply.status(message.includes('escapes') ? 400 : 404).send({ error: message });
+      return reply.status(404).send({ error: message });
     }
   });
 
@@ -340,6 +344,7 @@ export async function projectRoutes(
       ownerId,
       importedFiles: result.files,
       skippedFiles: result.skipped,
+      skippedCount: result.skippedCount,
     });
   });
 }
@@ -373,8 +378,10 @@ function ensureAdminUser(context: AuthContext): void {
  *
  * - `multipart/form-data` with a `file` part and an optional `title` field.
  *   This is what the web client uses.
- * - A JSON body with `buffer` (a byte array or base64 string) and `title`.
- *   JSON has no binary type, so the bytes arrive as `number[]`.
+ * - A JSON body with `buffer` and `title`. JSON has no binary type, so the
+ *   bytes arrive either as a byte array or as a base64 string; `encoding`
+ *   selects between them and defaults to base64, which is the only way a
+ *   JSON client can carry binary at all.
  */
 async function readImportPayload(
   request: FastifyRequest,
@@ -392,14 +399,14 @@ async function readImportPayload(
   }
 
   const body = request.body as
-    | { buffer?: unknown; title?: string }
+    | { buffer?: unknown; title?: string; encoding?: string }
     | undefined;
 
   if (!body || body.buffer === undefined || body.buffer === null) {
     return { title: body?.title };
   }
 
-  const archive = toBuffer(body.buffer);
+  const archive = toBuffer(body.buffer, body.encoding);
   return { archive, title: body.title };
 }
 
@@ -407,11 +414,11 @@ async function readImportPayload(
  * Coerce a JSON-encoded binary payload back into a Buffer.
  *
  * `Buffer.from({ type: 'Buffer', data: [...] })` is what `JSON.stringify`
- * produces, so both that shape and a plain byte array are accepted. A
- * base64 string is decoded as UTF-8 text because the JSON parser never
- * produces a base64 string for a Buffer on its own.
+ * produces, so that shape and a plain byte array are accepted directly.
+ * A string is base64 by default because that is the only lossless way to
+ * carry binary through JSON.
  */
-function toBuffer(value: unknown): Buffer | undefined {
+function toBuffer(value: unknown, encoding?: string): Buffer | undefined {
   if (Buffer.isBuffer(value)) {
     return value;
   }
@@ -422,7 +429,10 @@ function toBuffer(value: unknown): Buffer | undefined {
   }
 
   if (typeof value === 'string') {
-    return Buffer.from(value, 'utf8');
+    if (encoding === 'utf8' || encoding === 'binary') {
+      return Buffer.from(value, 'utf8');
+    }
+    return Buffer.from(value, 'base64');
   }
 
   if (value && typeof value === 'object') {

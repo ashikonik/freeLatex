@@ -3,6 +3,7 @@ import {
   mkdir,
   readdir,
   readFile,
+  rename,
   rm,
   stat,
   writeFile,
@@ -13,7 +14,13 @@ import { ZipArchive } from 'archiver';
 import yauzl from 'yauzl';
 import { nanoid } from 'nanoid';
 
-import { assertRealPathWithin, resolveWithin, toPosixPath } from './paths.js';
+import {
+  assertRealPathWithin,
+  assertSafeProjectId,
+  PathEscapeError,
+  resolveWithin,
+  toPosixPath,
+} from './paths.js';
 
 /**
  * Decode a zip entry name to a string.
@@ -69,6 +76,13 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 200 * 1024 * 1024;
 /** Upper bound on the number of entries in one imported archive. */
 const MAX_ARCHIVE_ENTRIES = 5_000;
+/**
+ * Upper bound on how many skipped entry names are reported back.
+ *
+ * The names are echoed to the client, so an archive of 5000 bad entries
+ * must not produce a 5000-element response body.
+ */
+const MAX_REPORTED_SKIPS = 50;
 
 /**
  * File storage for projects.
@@ -86,6 +100,7 @@ export class ProjectStorage {
 
   /** Absolute path of a project's directory. */
   projectDir(projectId: string): string {
+    assertSafeProjectId(projectId);
     return join(this.root, projectId);
   }
 
@@ -239,7 +254,13 @@ export class ProjectStorage {
       }
       try {
         result[entry.path] = await this.readProjectFile(projectId, entry.path);
-      } catch {
+      } catch (error) {
+        // A path-safety failure must not be silently swallowed: it means the
+        // project contains something that does not belong to it, and the
+        // caller needs to know rather than silently lose the file.
+        if (error instanceof PathEscapeError) {
+          throw error;
+        }
         // Skip files that cannot be read as text (binary assets).
       }
     }
@@ -250,7 +271,9 @@ export class ProjectStorage {
   /**
    * Write a complete set of files into a project, replacing what is there.
    *
-   * Used by snapshot rollback and zip import.
+   * Used by snapshot rollback and zip import. Files present in the project
+   * but absent from `files` are deleted, so the result matches `files`
+   * exactly rather than being a merge.
    */
   async writeAllFiles(projectId: string, files: Record<string, string>): Promise<void> {
     const dir = this.projectDir(projectId);
@@ -261,6 +284,14 @@ export class ProjectStorage {
       await assertRealPathWithin(dir, absolute);
       await mkdir(dirname(absolute), { recursive: true });
       await writeFile(absolute, content, 'utf8');
+    }
+
+    // Remove anything that the new file set does not mention.
+    const existing = await this.listProjectFiles(projectId);
+    for (const entry of existing) {
+      if (entry.type === 'file' && !(entry.path in files)) {
+        await this.deleteProjectFile(projectId, entry.path);
+      }
     }
   }
 
@@ -276,10 +307,12 @@ export class ProjectStorage {
 
     // The destination must be attached before the entries are appended, and
     // `finalize()` must not be awaited — awaiting it deadlocks because the
-    // archive only finishes once its output stream drains.
+    // archive only finishes once its output stream drains. The returned
+    // promise is discarded with a rejection handler so a mid-archive failure
+    // surfaces through the pipeline instead of an unhandled rejection.
     const done = pipeline(archive, destination);
     archive.glob('**/*', { cwd: dir, dot: true, nodir: true });
-    archive.finalize();
+    void archive.finalize().catch(() => undefined);
     await done;
   }
 
@@ -289,102 +322,125 @@ export class ProjectStorage {
    * Entry paths are validated before anything touches the disk: an archive
    * containing `../../etc/passwd` or an absolute path is rejected outright
    * rather than written outside the project directory.
+   *
+   * The extraction happens in a staging directory and is moved into place only
+   * once every entry has been processed. A failure part-way through therefore
+   * leaves no half-imported project behind.
    */
   async importZip(
     projectId: string,
     zipBuffer: Buffer,
-  ): Promise<{ files: number; skipped: string[] }> {
+  ): Promise<{ files: number; skipped: string[]; skippedCount: number }> {
     const dir = this.projectDir(projectId);
-    await mkdir(dir, { recursive: true });
+    const staging = `${dir}.importing`;
+
+    // Clear any staging directory left behind by an interrupted import.
+    await rm(staging, { recursive: true, force: true });
+    await mkdir(staging, { recursive: true });
 
     const skipped: string[] = [];
+    let skippedCount = 0;
     let fileCount = 0;
     let totalBytes = 0;
 
-    await new Promise<void>((resolve, reject) => {
-      // `decodeStrings: false` hands us the raw entry-name bytes. yauzl's own
-      // decoding rejects `../evil.tex` with a fatal archive-level error, which
-      // would abort the whole import; we want to skip that entry and keep
-      // importing. Owning the decode also means we own the path validation.
-      yauzl.fromBuffer(
-        zipBuffer,
-        { lazyEntries: true, decodeStrings: false },
-        (error, zipFile) => {
-          if (error || !zipFile) {
-            reject(error ?? new Error('Could not read the uploaded archive.'));
-            return;
-          }
+    // Only the first few names are kept: the list is echoed to the client.
+    const skip = (entryName: string): void => {
+      skippedCount += 1;
+      if (skipped.length < MAX_REPORTED_SKIPS) {
+        skipped.push(entryName);
+      }
+    };
 
-          let entryCount = 0;
-
-          zipFile.readEntry();
-
-          zipFile.on('entry', (entry: yauzl.Entry) => {
-            entryCount += 1;
-            if (entryCount > MAX_ARCHIVE_ENTRIES) {
-              zipFile.close();
-              reject(new Error('The archive contains too many files.'));
+    try {
+      await new Promise<void>((resolve, reject) => {
+        // `decodeStrings: false` hands us the raw entry-name bytes. yauzl's own
+        // decoding rejects `../evil.tex` with a fatal archive-level error,
+        // which would abort the whole import; we want to skip that entry and
+        // keep importing. Owning the decode also means we own the path
+        // validation.
+        yauzl.fromBuffer(
+          zipBuffer,
+          { lazyEntries: true, decodeStrings: false },
+          (error, zipFile) => {
+            if (error || !zipFile) {
+              reject(error ?? new Error('Could not read the uploaded archive.'));
               return;
             }
 
-            const entryName = decodeEntryName(entry.fileName);
+            let entryCount = 0;
 
-            // Skip macOS resource-fork noise and directory entries.
-            if (entryName.startsWith('__MACOSX/') || entryName.endsWith('/')) {
-              zipFile.readEntry();
-              return;
-            }
+            zipFile.readEntry();
 
-            let absolute: string;
-            try {
-              absolute = resolveWithin(dir, entryName);
-            } catch {
-              // A path that tries to escape the project is never written.
-              skipped.push(entryName);
-              zipFile.readEntry();
-              return;
-            }
+            zipFile.on('entry', (entry: yauzl.Entry) => {
+              entryCount += 1;
+              if (entryCount > MAX_ARCHIVE_ENTRIES) {
+                zipFile.close();
+                reject(new Error('The archive contains too many files.'));
+                return;
+              }
 
-            if (entry.uncompressedSize > MAX_FILE_BYTES) {
-              skipped.push(entryName);
-              zipFile.readEntry();
-              return;
-            }
+              const entryName = decodeEntryName(entry.fileName);
 
-            zipFile.openReadStream(entry, (streamError, readStream) => {
-              if (streamError || !readStream) {
-                skipped.push(entryName);
+              // Skip macOS resource-fork noise and directory entries.
+              if (entryName.startsWith('__MACOSX/') || entryName.endsWith('/')) {
                 zipFile.readEntry();
                 return;
               }
 
-              totalBytes += entry.uncompressedSize;
-              if (totalBytes > MAX_TOTAL_BYTES) {
-                zipFile.close();
-                reject(new Error('The archive is too large to import.'));
+              let absolute: string;
+              try {
+                absolute = resolveWithin(staging, entryName);
+              } catch {
+                // A path that tries to escape the project is never written.
+                skip(entryName);
+                zipFile.readEntry();
                 return;
               }
 
-              mkdir(dirname(absolute), { recursive: true })
-                .then(() => assertRealPathWithin(dir, absolute))
-                .then(() => pipeline(readStream, createWriteStream(absolute)))
-                .then(() => {
-                  fileCount += 1;
+              if (entry.uncompressedSize > MAX_FILE_BYTES) {
+                skip(entryName);
+                zipFile.readEntry();
+                return;
+              }
+
+              zipFile.openReadStream(entry, (streamError, readStream) => {
+                if (streamError || !readStream) {
+                  skip(entryName);
                   zipFile.readEntry();
-                })
-                .catch((writeError: unknown) => {
-                  // A symlink escape is skipped like any other unsafe entry;
-                  // a genuine I/O failure aborts the import.
-                  if (writeError instanceof Error && writeError.message.includes('escapes')) {
-                    skipped.push(entryName);
-                    zipFile.readEntry();
-                    return;
-                  }
+                  return;
+                }
+
+                totalBytes += entry.uncompressedSize;
+                if (totalBytes > MAX_TOTAL_BYTES) {
                   zipFile.close();
-                  reject(writeError);
-                });
+                  reject(new Error('The archive is too large to import.'));
+                  return;
+                }
+
+                // The realpath check must run before the directory is
+                // created: `mkdir` follows a symlink planted in the project,
+                // so creating first would write a directory outside it.
+                assertRealPathWithin(staging, absolute)
+                  .then(() => mkdir(dirname(absolute), { recursive: true }))
+                  .then(() => assertRealPathWithin(staging, absolute))
+                  .then(() => pipeline(readStream, createWriteStream(absolute)))
+                  .then(() => {
+                    fileCount += 1;
+                    zipFile.readEntry();
+                  })
+                  .catch((writeError: unknown) => {
+                    // A symlink escape is skipped like any other unsafe entry;
+                    // a genuine I/O failure aborts the import.
+                    if (writeError instanceof PathEscapeError) {
+                      skip(entryName);
+                      zipFile.readEntry();
+                      return;
+                    }
+                    zipFile.close();
+                    reject(writeError);
+                  });
+              });
             });
-          });
 
           zipFile.on('end', () => {
             resolve();
@@ -397,7 +453,16 @@ export class ProjectStorage {
       );
     });
 
-    return { files: fileCount, skipped };
+      // The import is complete: swap the staging directory into place.
+      await rm(dir, { recursive: true, force: true });
+      await rename(staging, dir);
+
+      return { files: fileCount, skipped, skippedCount };
+    } catch (error) {
+      // Leave no partially imported project behind.
+      await rm(staging, { recursive: true, force: true });
+      throw error;
+    }
   }
 }
 

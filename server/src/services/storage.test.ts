@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, rm, readFile, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -306,6 +306,34 @@ describe('zip export and import', () => {
   it('rejects a buffer that is not a zip archive', async () => {
     await expect(storage.importZip('prj_1', Buffer.from('not a zip'))).rejects.toThrow();
   });
+
+  it('never writes outside the project when a symlink is planted inside it', async () => {
+    const outside = join(root, 'outside');
+    await mkdir(outside, { recursive: true });
+
+    const { symlink } = await import('node:fs/promises');
+    await storage.createProject('prj_1');
+    await symlink(outside, join(root, 'projects', 'prj_1', 'link'));
+
+    // The entry is lexically inside the project, but `link` points out of it.
+    // Creating the parent directory before the realpath check would create
+    // `outside/sub` on disk even though the file itself is rejected.
+    const zip = makeZip({ 'link/sub/file.tex': 'content' });
+
+    await storage.importZip('prj_1', zip);
+
+    // Nothing may be created outside the project directory.
+    await expect(stat(join(outside, 'sub'))).rejects.toThrow();
+    await expect(stat(join(outside, 'sub', 'file.tex'))).rejects.toThrow();
+  });
+
+  it('leaves no project directory behind when an import fails', async () => {
+    await expect(storage.importZip('prj_1', Buffer.from('not a zip'))).rejects.toThrow();
+
+    // The failed import must not leave a half-populated project directory.
+    await expect(stat(join(root, 'projects', 'prj_1'))).rejects.toThrow();
+    await expect(stat(join(root, 'projects', 'prj_1.importing'))).rejects.toThrow();
+  });
 });
 
 describe('path safety at the project level', () => {
@@ -315,6 +343,18 @@ describe('path safety at the project level', () => {
     await storage.writeProjectFile('prj_1', 'only-here.tex', 'secret');
 
     expect(await storage.exists('prj_2', 'only-here.tex')).toBe(false);
+  });
+
+  it('refuses a project id that is not a plain identifier', async () => {
+    // The project id becomes a directory name, so it must not be able to
+    // place the project outside the storage root.
+    await expect(storage.createProject('../evil')).rejects.toThrow(/not a valid identifier/);
+    await expect(storage.writeProjectFile('../evil', 'a.tex', 'x')).rejects.toThrow(
+      /not a valid identifier/,
+    );
+    await expect(storage.readProjectFile('prj/../../evil', 'a.tex')).rejects.toThrow(
+      /not a valid identifier/,
+    );
   });
 
   it('does not follow a symlink planted in the project directory', async () => {

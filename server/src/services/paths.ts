@@ -2,6 +2,19 @@ import { dirname, isAbsolute, normalize, relative, sep } from 'node:path';
 import { realpath } from 'node:fs/promises';
 
 /**
+ * Raised when a path would leave the directory it must stay inside.
+ *
+ * A dedicated type so callers can distinguish "this input is unsafe" from
+ * "the disk failed" without matching on message text.
+ */
+export class PathEscapeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PathEscapeError';
+  }
+}
+
+/**
  * Resolve a project-relative path to an absolute path inside a root directory.
  *
  * This is the single gate against path traversal. A relative path like
@@ -11,16 +24,16 @@ import { realpath } from 'node:fs/promises';
  * @param root Absolute path of the directory the file must stay inside.
  * @param relativePath Project-relative path from user input.
  * @returns The absolute path, guaranteed to be inside `root`.
- * @throws Error when the path escapes the root or is absolute.
+ * @throws PathEscapeError when the path escapes the root or is absolute.
  */
 export function resolveWithin(root: string, relativePath: string): string {
   if (relativePath.includes('\0')) {
-    throw new Error('Path contains a null byte.');
+    throw new PathEscapeError('Path contains a null byte.');
   }
 
   // An absolute path in the request would ignore the root entirely.
   if (isAbsolute(relativePath)) {
-    throw new Error('Path must be relative to the project.');
+    throw new PathEscapeError('Path must be relative to the project.');
   }
 
   const normalizedRoot = normalize(root);
@@ -31,7 +44,7 @@ export function resolveWithin(root: string, relativePath: string): string {
   // and sibling-prefix tricks like "/data/projects-evil".
   const rel = relative(normalizedRoot, target);
   if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
-    throw new Error('Path escapes the project directory.');
+    throw new PathEscapeError('Path escapes the project directory.');
   }
 
   return target;
@@ -62,6 +75,22 @@ export function toPosixPath(relativePath: string): string {
 }
 
 /**
+ * Check that a project id is a plain, safe identifier.
+ *
+ * Project ids become directory names under the storage root, so an id
+ * containing a path separator or `..` would place the project outside the
+ * root. Route handlers already authorise the caller against the project
+ * row, but the directory name must stand on its own.
+ *
+ * @throws PathEscapeError when the id is not a safe identifier.
+ */
+export function assertSafeProjectId(projectId: string): void {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(projectId)) {
+    throw new PathEscapeError('Project id is not a valid identifier.');
+  }
+}
+
+/**
  * Verify that a path, after following any symlinks, is still inside the root.
  *
  * The lexical check in `resolveWithin` is not enough: a symlink planted
@@ -72,7 +101,7 @@ export function toPosixPath(relativePath: string): string {
  * The target file itself may not exist yet (a write), so the check walks up
  * to the nearest existing parent directory.
  *
- * @throws Error when the resolved path lands outside the root.
+ * @throws PathEscapeError when the resolved path lands outside the root.
  */
 export async function assertRealPathWithin(root: string, target: string): Promise<void> {
   const realRoot = await realpath(root).catch(() => normalize(root));
@@ -86,11 +115,11 @@ export async function assertRealPathWithin(root: string, target: string): Promis
       const resolved = suffix === '' ? real : `${real}${sep}${suffix}`;
       const rel = relative(realRoot, resolved);
       if (rel.startsWith('..') || isAbsolute(rel)) {
-        throw new Error('Path escapes the project directory.');
+        throw new PathEscapeError('Path escapes the project directory.');
       }
       return;
     } catch (error) {
-      if (error instanceof Error && error.message === 'Path escapes the project directory.') {
+      if (error instanceof PathEscapeError) {
         throw error;
       }
     }
