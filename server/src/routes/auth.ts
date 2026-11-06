@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 import type { AuthContext } from '../auth/service.js';
 import { authenticateApiKey, parseBearer } from '../auth/service.js';
@@ -115,7 +115,7 @@ export async function authRoutes(app: FastifyInstance, context: AuthContext): Pr
       return reply.status(403).send({ error: 'This endpoint requires the admin API key.' });
     }
 
-    const rows = context.db.select().from(users).where(eq(users.role, 'user')).all();
+    const rows = context.db.select().from(users).where(eq(users.role, 'user')).limit(1000).all();
 
     const payload: ListKeysReply = {
       keys: rows.map((row) => ({
@@ -126,5 +126,31 @@ export async function authRoutes(app: FastifyInstance, context: AuthContext): Pr
       })),
     };
     return reply.send(payload);
+  });
+
+  /**
+   * Revoke a provisioned user key.
+   *
+   * Deleting the user row invalidates the key immediately — only the hash is
+   * stored, so there is nothing else to change. The user's projects cascade
+   * away with it.
+   */
+  app.delete('/api/auth/keys/:id', async (request, reply) => {
+    const identity = request.identity;
+    if (!identity || identity.kind !== 'admin') {
+      return reply.status(403).send({ error: 'This endpoint requires the admin API key.' });
+    }
+
+    const { id } = request.params as { id: string };
+
+    const result = context.db
+      .delete(users)
+      .where(and(eq(users.id, id), eq(users.role, 'user')))
+      .run();
+
+    if (result.changes === 0) {
+      return reply.status(404).send({ error: 'User key not found.' });
+    }
+    return reply.status(204).send();
   });
 }

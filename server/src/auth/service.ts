@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 
 import type { Db } from '../db/index.js';
 import { shareTokens, users } from '../db/schema.js';
@@ -131,24 +131,4 @@ export function authenticateRequest(
     return authenticateShareToken(context, request.shareToken, now);
   }
   return fail('No credentials provided.');
-}
-
-/**
- * Find the share token record for a project that matches the given plaintext.
- *
- * Used when a project-scoped request must confirm the caller holds a token
- * for *this* project rather than for some other project.
- */
-export function findShareTokenForProject(
-  db: Db,
-  projectId: string,
-  plaintextToken: string,
-): typeof shareTokens.$inferSelect | undefined {
-  return db
-    .select()
-    .from(shareTokens)
-    .where(
-      and(eq(shareTokens.projectId, projectId), eq(shareTokens.tokenHash, hashSecret(plaintextToken))),
-    )
-    .get();
 }

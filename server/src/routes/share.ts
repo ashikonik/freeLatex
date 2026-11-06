@@ -3,9 +3,9 @@ import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 
 import type { AuthContext } from '../auth/service.js';
+import { isProjectOwner } from '../auth/authorize.js';
 import { shareTokens } from '../db/schema.js';
 import { generateSecret, hashSecret } from '../utils/hash.js';
-import { isAccount } from '../auth/identity.js';
 
 interface CreateShareBody {
   /** 'rw' for edit access, 'ro' for view-only. */
@@ -17,8 +17,14 @@ interface CreateShareBody {
 
 const SHARE_TOKEN_PREFIX = { rw: 'rw_', ro: 'ro_' } as const;
 
+/** Upper bound on active share links per project, to keep the table bounded. */
+const MAX_SHARE_TOKENS_PER_PROJECT = 100;
+
 /**
  * Share-link routes: mint, list, and revoke project access tokens.
+ *
+ * Every route is owner-only. A share token cannot mint further share tokens —
+ * that would let a guest chain their way to the owner's whole workspace.
  */
 export async function shareRoutes(app: FastifyInstance, context: AuthContext): Promise<void> {
   /**
@@ -31,8 +37,10 @@ export async function shareRoutes(app: FastifyInstance, context: AuthContext): P
     const { id } = request.params as { id: string };
     const identity = request.identity;
 
-    if (!identity || !isAccount(identity)) {
-      return reply.status(403).send({ error: 'Only the project owner can share it.' });
+    if (!identity || !isProjectOwner(context.db, identity, id)) {
+      return reply
+        .status(403)
+        .send({ error: 'Only the project owner can share it.' });
     }
 
     const body = (request.body ?? {}) as CreateShareBody;
@@ -49,6 +57,17 @@ export async function shareRoutes(app: FastifyInstance, context: AuthContext): P
         return reply.status(400).send({ error: 'expiresAt must be in the future.' });
       }
       expiresAt = parsed;
+    }
+
+    const existing = context.db
+      .select()
+      .from(shareTokens)
+      .where(eq(shareTokens.projectId, id))
+      .all();
+    if (existing.length >= MAX_SHARE_TOKENS_PER_PROJECT) {
+      return reply
+        .status(429)
+        .send({ error: `A project may have at most ${MAX_SHARE_TOKENS_PER_PROJECT} share links.` });
     }
 
     const plaintext = generateSecret(SHARE_TOKEN_PREFIX[permission]);
@@ -76,19 +95,22 @@ export async function shareRoutes(app: FastifyInstance, context: AuthContext): P
     });
   });
 
-  /** List a project's active share tokens. Plaintext tokens are not recoverable. */
+  /** List a project's share tokens. Plaintext tokens are not recoverable. */
   app.get('/api/projects/:id/share', async (request, reply) => {
     const { id } = request.params as { id: string };
     const identity = request.identity;
 
-    if (!identity || !isAccount(identity)) {
-      return reply.status(403).send({ error: 'Only the project owner can view share links.' });
+    if (!identity || !isProjectOwner(context.db, identity, id)) {
+      return reply
+        .status(403)
+        .send({ error: 'Only the project owner can view share links.' });
     }
 
     const rows = context.db
       .select()
       .from(shareTokens)
       .where(eq(shareTokens.projectId, id))
+      .limit(MAX_SHARE_TOKENS_PER_PROJECT)
       .all();
 
     const now = Date.now();
@@ -109,8 +131,10 @@ export async function shareRoutes(app: FastifyInstance, context: AuthContext): P
     const { id, tokenId } = request.params as { id: string; tokenId: string };
     const identity = request.identity;
 
-    if (!identity || !isAccount(identity)) {
-      return reply.status(403).send({ error: 'Only the project owner can revoke share links.' });
+    if (!identity || !isProjectOwner(context.db, identity, id)) {
+      return reply
+        .status(403)
+        .send({ error: 'Only the project owner can revoke share links.' });
     }
 
     const result = context.db
