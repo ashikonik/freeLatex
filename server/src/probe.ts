@@ -51,6 +51,35 @@ async function main(): Promise<void> {
       if (rows.length !== 1) {
         throw new Error('probe: user insert did not persist');
       }
+
+      // The HTTP server must boot and answer real requests.
+      const { buildApp } = await import('./app.js');
+      const { app } = await buildApp({ env, db: handle });
+      await app.ready();
+      try {
+        const health = await app.inject({ method: 'GET', url: '/api/health' });
+        if (health.statusCode !== 200) {
+          throw new Error(`probe: health check returned ${health.statusCode}`);
+        }
+
+        const unauthorized = await app.inject({ method: 'GET', url: '/api/auth/me' });
+        if (unauthorized.statusCode !== 401) {
+          throw new Error(
+            `probe: unauthenticated request returned ${unauthorized.statusCode}, expected 401`,
+          );
+        }
+
+        const login = await app.inject({
+          method: 'POST',
+          url: '/api/auth/login',
+          payload: { apiKey: env.adminApiKey },
+        });
+        if (login.statusCode !== 200) {
+          throw new Error(`probe: admin login returned ${login.statusCode}`);
+        }
+      } finally {
+        await app.close();
+      }
     } finally {
       handle.close();
     }

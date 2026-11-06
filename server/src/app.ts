@@ -1,0 +1,83 @@
+import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
+import cors from '@fastify/cors';
+import websocket from '@fastify/websocket';
+
+import { loadEnv, type Env } from './config/env.js';
+import { openDatabase, type DbHandle } from './db/index.js';
+import { requireAuth } from './middleware/auth.js';
+import { authRoutes, loginRoutes } from './routes/auth.js';
+import { shareRoutes } from './routes/share.js';
+
+export interface AppOptions {
+  env?: Env;
+  /** Inject an open database handle. Used by tests to supply an in-memory DB. */
+  db?: DbHandle;
+  logger?: boolean;
+}
+
+export interface BuiltApp {
+  app: FastifyInstance;
+  env: Env;
+  db: DbHandle;
+}
+
+/**
+ * Build the Fastify application.
+ *
+ * Kept separate from the process entry point so tests can build an app and
+ * use `app.inject()` without binding a port.
+ */
+export async function buildApp(options: AppOptions = {}): Promise<BuiltApp> {
+  const env = options.env ?? loadEnv();
+  const db = options.db ?? openDatabase(env.dataDir);
+
+  const app = Fastify({
+    logger: options.logger ?? false,
+  });
+
+  await app.register(cors, {
+    origin: true,
+    credentials: true,
+  });
+  await app.register(websocket, {
+    options: {
+      maxPayload: 5 * 1024 * 1024,
+    },
+  });
+
+  const context = {
+    db: db.db,
+    authMode: env.authMode,
+    adminApiKey: env.adminApiKey,
+  };
+
+  app.get('/api/health', async () => ({
+    status: 'ok',
+    authMode: env.authMode,
+    version: '0.1.0',
+  }));
+
+  // /api/auth/login is registered OUTSIDE the guarded scope below: it is the
+  // endpoint that *establishes* credentials, so it receives the API key in the
+  // request body and validates it itself.
+  await app.register(loginRoutes, context);
+
+  // Every other /api route requires credentials. Share tokens are accepted on
+  // the project-scoped routes; the guard picks whichever is present.
+  await app.register(async (scoped) => {
+    scoped.addHook('onRequest', requireAuth(context));
+
+    await scoped.register(authRoutes, context);
+    await scoped.register(shareRoutes, context);
+  });
+
+  app.setErrorHandler((error: FastifyError, request, reply) => {
+    request.log.error({ err: error }, 'request failed');
+    const statusCode = error.statusCode ?? 500;
+    return reply.status(statusCode).send({
+      error: statusCode === 500 ? 'Internal server error.' : error.message,
+    });
+  });
+
+  return { app, env, db };
+}
