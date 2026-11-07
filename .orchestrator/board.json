@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "freeLatex",
-  "updated_at": "2026-11-07T12:16:19Z",
+  "updated_at": "2026-11-07T12:30:04Z",
   "tasks": [
     {
       "id": "T-001",
@@ -83,16 +83,16 @@
       "id": "T-003",
       "title": "Step 12: Share links that actually open a project",
       "body": "Make the /p/{id}?token=... deep link work. The server minted share links and the API and WebSocket understood share tokens, but the client had no route for /p/ — a co-editor following a link landed on the sign-in page and could not get in. Add the deep-link handling to the client, and accept a share token carried as a bearer so the browser can make requests with it. Verified with scripts/share-probe.mjs against a running server.",
-      "state": "in_progress",
+      "state": "done",
       "labels": [
         "step-12",
         "collaboration"
       ],
       "assignee": null,
       "blocked_by": [],
-      "branch": "step-10-delivery",
+      "branch": "feature/step-12-share-links",
       "created_at": "2026-11-07T12:16:16Z",
-      "updated_at": "2026-11-07T12:16:19Z",
+      "updated_at": "2026-11-07T12:30:04Z",
       "history": [
         {
           "at": "2026-11-07T12:16:16Z",
@@ -107,6 +107,20 @@
           "to": "in_progress",
           "actor": "orchestrator",
           "note": ""
+        },
+        {
+          "at": "2026-11-07T12:30:02Z",
+          "from": "in_progress",
+          "to": "in_progress",
+          "actor": "orchestrator",
+          "note": "updated branch"
+        },
+        {
+          "at": "2026-11-07T12:30:04Z",
+          "from": "in_progress",
+          "to": "done",
+          "actor": "orchestrator",
+          "note": "Share links work end to end: client deep link, bearer share token, runtime probe. PR #1."
         }
       ]
     }
