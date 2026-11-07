@@ -112,6 +112,26 @@ server.
 The Docker build fetches these assets itself, so a container ships with the
 instant preview ready to use.
 
+### 5. Inviting a co-editor
+There are two ways to give somebody access, and they differ in what the
+person needs from you.
+
+**A share link** needs nothing from them. Open a project, press *Share*,
+create a link with the permission you want, and send it over. The link is a
+URL of the form `/p/{projectId}?token=rw_...`; opening it takes the reader
+straight into the editor, with no account and no sign-in. A `rw_` link may
+edit, an `ro_` link may only read. The link can be given an expiry date and
+can be revoked at any time from the same panel. The plaintext token is shown
+only once, when it is created.
+
+**A user key** gives somebody a workspace of their own. In `AUTH_MODE=multi`
+the admin provisions a key for them with `POST /api/auth/keys`; they sign in
+with it and see only their own projects. Use this when a collaborator should
+have their own projects rather than access to one of yours.
+
+For a small group working on one document, the share link is the simpler
+choice.
+
 ---
 
 ## ⚙️ Configuration

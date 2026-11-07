@@ -7,6 +7,7 @@
  */
 
 import type { AiProvider } from '../components/ai/ai-settings.js';
+import { readActiveShareToken } from './share-link.js';
 
 /** The shape of a project as the API reports it. */
 export interface Project {
@@ -64,6 +65,18 @@ export function setApiKeyProvider(provider: KeyProvider): void {
 }
 
 /**
+ * The credential the request carries.
+ *
+ * A reader who arrived through a share link is a guest of one project, so
+ * the share token is their credential for this visit; it wins over the stored
+ * account key, because the account key may name a different workspace
+ * entirely. The server tells the two apart by the token's own shape.
+ */
+function credentialOf(): string | undefined {
+  return readActiveShareToken() ?? readKey();
+}
+
+/**
  * Perform an authenticated request against the API.
  *
  * @param path The path below `/api`.
@@ -80,7 +93,7 @@ export async function apiRequest<T>(
   } = {},
 ): Promise<T> {
   const headers: Record<string, string> = { ...options.headers };
-  const key = readKey();
+  const key = credentialOf();
   // The caller's own header wins, so a request can say something different
   // about who it is on purpose.
   if (key && !('authorization' in headers)) {
@@ -157,7 +170,7 @@ export async function importProject(
   title?: string,
 ): Promise<ImportResult> {
   const headers: Record<string, string> = {};
-  const key = readKey();
+  const key = credentialOf();
   if (key) {
     headers.authorization = `Bearer ${key}`;
   }

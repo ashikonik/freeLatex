@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "freeLatex",
-  "updated_at": "2026-11-07T11:23:54Z",
+  "updated_at": "2026-11-07T12:16:19Z",
   "tasks": [
     {
       "id": "T-001",
@@ -74,6 +74,37 @@
           "at": "2026-11-07T11:23:54Z",
           "from": "in_progress",
           "to": "done",
+          "actor": "orchestrator",
+          "note": ""
+        }
+      ]
+    },
+    {
+      "id": "T-003",
+      "title": "Step 12: Share links that actually open a project",
+      "body": "Make the /p/{id}?token=... deep link work. The server minted share links and the API and WebSocket understood share tokens, but the client had no route for /p/ — a co-editor following a link landed on the sign-in page and could not get in. Add the deep-link handling to the client, and accept a share token carried as a bearer so the browser can make requests with it. Verified with scripts/share-probe.mjs against a running server.",
+      "state": "in_progress",
+      "labels": [
+        "step-12",
+        "collaboration"
+      ],
+      "assignee": null,
+      "blocked_by": [],
+      "branch": "step-10-delivery",
+      "created_at": "2026-11-07T12:16:16Z",
+      "updated_at": "2026-11-07T12:16:19Z",
+      "history": [
+        {
+          "at": "2026-11-07T12:16:16Z",
+          "from": null,
+          "to": "todo",
+          "actor": "orchestrator",
+          "note": "created"
+        },
+        {
+          "at": "2026-11-07T12:16:19Z",
+          "from": "todo",
+          "to": "in_progress",
           "actor": "orchestrator",
           "note": ""
         }

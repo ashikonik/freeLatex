@@ -115,8 +115,15 @@ export function authenticateShareToken(
 /**
  * Resolve an identity from whichever credential the request carries.
  *
- * An Authorization header wins over a share token query parameter, so a
- * signed-in collaborator is never downgraded to a lesser share permission.
+ * The credential in the Authorization header wins over a share token in the
+ * query string, so a signed-in collaborator is never downgraded to a lesser
+ * share permission.
+ *
+ * A credential in the header is judged by its shape: a `rw_`/`ro_` prefix
+ * means a share token, anything else is an account key. Without this, a
+ * reader who arrived through a share link could not make any request at
+ * all, because the browser sends the link's token as a bearer while the
+ * share token is only ever accepted as a query parameter.
  */
 export function authenticateRequest(
   context: AuthContext,
@@ -125,6 +132,9 @@ export function authenticateRequest(
 ): AuthResult {
   const bearer = parseBearer(request.authorization);
   if (bearer) {
+    if (isShareTokenShape(bearer)) {
+      return authenticateShareToken(context, bearer, now);
+    }
     return authenticateApiKey(context, bearer);
   }
   if (request.shareToken) {

@@ -16,6 +16,10 @@ export interface Identity {
   role: string;
   name?: string;
   userId?: string;
+  /** The project a share link opens, when the caller is a guest. */
+  projectId?: string;
+  /** What a share link allows, when the caller is a guest. */
+  permission?: 'rw' | 'ro';
 }
 
 /** The value the auth context carries. */
@@ -111,9 +115,14 @@ export function AuthProvider({ children }: { children: ReactNode }): ReactNode {
     // leaves before the effect above runs again with the new key.
     setApiKeyProvider(() => stored);
 
-    void apiRequest<{ kind: Identity['kind']; role: string; name?: string; userId?: string }>(
-      '/auth/me',
-    )
+    void apiRequest<{
+      kind: Identity['kind'];
+      role: string;
+      name?: string;
+      userId?: string;
+      projectId?: string;
+      permission?: 'rw' | 'ro';
+    }>('/auth/me')
       .then((me) => {
         if (cancelled) {
           return;

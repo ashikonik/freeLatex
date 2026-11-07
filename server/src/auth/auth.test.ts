@@ -247,6 +247,38 @@ describe('authenticateRequest', () => {
     }
   });
 
+  it('accepts a share token carried as a bearer', () => {
+    // The browser sends the link's token as a bearer, because that is the
+    // only way it can put a credential in a request. A reader who arrived
+    // through a link must therefore be able to make requests with it.
+    handle.db
+      .insert(shareTokens)
+      .values({
+        id: 'shr_1',
+        projectId: 'prj_1',
+        tokenHash: hashSecret('rw_abc'),
+        permission: 'rw',
+      })
+      .run();
+
+    const result = authenticateRequest(context('multi'), {
+      authorization: 'Bearer rw_abc',
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.identity.kind).toBe('share');
+    }
+  });
+
+  it('still refuses an account key that happens to be invalid', () => {
+    const result = authenticateRequest(context('multi'), {
+      authorization: 'Bearer sk_user_not_a_real_key',
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
   it('rejects a request with no credentials at all', () => {
     const result = authenticateRequest(context('multi'), {});
 

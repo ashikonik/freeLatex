@@ -13,6 +13,7 @@ import { SplitPane } from '../components/layout/SplitPane.js';
 import { ShareModal } from '../components/share/ShareModal.js';
 import { PreviewPanel } from '../components/viewer/PreviewPanel.js';
 import { listFiles, readFile, type Project } from '../lib/api.js';
+import { readActiveShareToken } from '../lib/share-link.js';
 import { useAuth } from '../context/AuthContext.js';
 
 /** The properties of the workspace. */
@@ -354,12 +355,19 @@ function collectFilePaths(
 }
 
 /**
- * The API key the socket authenticates with.
+ * The credential the socket authenticates with.
  *
- * The socket needs the key before the auth context has verified it, so it is
- * read straight from the storage the context writes to.
+ * The socket needs the credential before the auth context has verified it, so
+ * it is read straight from the storage the context writes to. A reader who
+ * arrived through a share link has no account key, so the share token of the
+ * visit is used instead — the server tells the two apart by their shape, and
+ * a share token reaches exactly the one project it was minted for.
  */
 function apiKeyOf(): string {
+  const shareToken = readActiveShareToken();
+  if (shareToken) {
+    return shareToken;
+  }
   try {
     return window.localStorage.getItem('freelatex.apiKey') ?? '';
   } catch {
