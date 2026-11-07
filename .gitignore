@@ -45,5 +45,8 @@ coverage/
 .DS_Store
 Thumbs.db
 
+# Harness configuration (per-machine MCP registration)
+.puku-cli/
+
 # Docker
 docker/data/

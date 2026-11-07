@@ -60,10 +60,28 @@ npm run dev
 ```
 
 ### 3. Docker Deployment
+The image holds the server, the client's built files and the Tectonic
+compiler, so a deployment is one container on one port.
+
 ```bash
 docker build -f docker/Dockerfile -t freelatex .
-docker run -p 3000:3000 -e ADMIN_API_KEY="my-secret" -v freelatex_data:/app/data freelatex
+docker run -p 3030:3030 -e ADMIN_API_KEY="my-secret" -v freelatex_data:/app/data freelatex
 ```
+
+Or with compose:
+```bash
+cd docker
+ADMIN_API_KEY="my-secret" docker compose up --build
+```
+
+The container serves the whole application on <http://localhost:3030>.
+
+To build a smaller image without the in-browser preview:
+```bash
+docker build -f docker/Dockerfile --build-arg WITH_WASM=false -t freelatex .
+```
+That image skips the BusyTeX WebAssembly assets (520 MB) and offers the
+**🖥️ Server Tectonic Build** mode only.
 
 ### 4. Frontend
 ```bash
@@ -79,6 +97,9 @@ the [texlyre-busytex](https://github.com/TeXlyre/texlyre-busytex) release
 archive and served from `client/public/core/busytex`. Without them the
 **🖥️ Server Tectonic Build** mode still works, because it compiles on the
 server.
+
+The Docker build fetches these assets itself, so a container ships with the
+instant preview ready to use.
 
 ---
 

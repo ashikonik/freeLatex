@@ -90,6 +90,7 @@ function envFor(): Env {
     dataDir,
     compileTimeoutMs: 30_000,
     nodeEnv: 'test',
+    staticDir: '',
   };
 }
 

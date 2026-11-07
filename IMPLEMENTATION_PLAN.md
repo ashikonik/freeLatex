@@ -258,6 +258,12 @@ The implementation is broken down into **10 granular, sequential micro-steps**. 
   - Inverse sync: Double clicking PDF jumps CodeMirror cursor to corresponding line.
 - **9.3**: Implement `client/src/compiler/wasm-worker.ts`:
   - Web Worker loading SwiftLaTeX WebAssembly engine for instant offline compilation.
+  - **Deviation**: SwiftLaTeX is not published on npm and its package mirror
+    (`texlive2.swiftlatex.com`) is offline, so the engine is
+    [`texlyre-busytex`](https://github.com/TeXlyre/texlyre-busytex) 1.4.1
+    instead — TeX Live 2026 in WebAssembly with XeLaTeX and SyncTeX. Its
+    runtime assets are not in the npm tarball; they are fetched with
+    `npm run download-assets` and served from `/core/busytex`.
 - **9.4**: Implement `client/src/components/layout/Header.tsx`:
   - Hybrid toggle: switch between "⚡ Instant Wasm Preview" and "🖥️ Server Tectonic Build".
   - Share modal button, Document History (Version Control) modal button.
@@ -282,12 +288,26 @@ The implementation is broken down into **10 granular, sequential micro-steps**. 
   - `AIAssistant.tsx`: Sidebar assistant for academic tone polish, equation drafting, BibTeX search.
   - `ErrorFixModal.tsx`: Parses compiler errors and presents AI diff with one-click "Apply Fix".
 - **10.4**: Implement `server/src/routes/ai.ts` (lightweight CORS proxy for AI calls).
+  - **Design note**: the provider's key travels in the `x-provider-key` header
+    rather than in `Authorization`, because `Authorization` already carries
+    the workspace's own key and the authentication reads it before the route
+    is reached.
 - **10.5**: Create production `docker/Dockerfile` & `docker/docker-compose.yml`:
-  - Multi-stage build (build client static files, build server, bundle Tectonic, serve everything on port 3030 from a single container <300MB).
+  - Multi-stage build (build client static files, build server, bundle Tectonic, serve everything on port 3030 from a single container).
+  - The server serves the client's built files itself (`STATIC_DIR`), so the
+    deployment is one container on one origin.
+  - **Deviation**: the image is ~560 MB rather than the planned <300 MB. The
+    floor is the Node runtime itself (120 MB) plus the base system (114 MB),
+    and the BusyTeX WebAssembly assets alone are 520 MB — the two targets are
+    mutually exclusive. A build with `--build-arg WITH_WASM=false` omits the
+    assets and offers the server-side build only.
+  - Tectonic is bundled as the statically-linked musl build, and its format
+    bundle is fetched while the image is built, so a fresh container compiles
+    a document at once rather than timing out on the first download.
 - **Verification**:
   - Head 1: Full end-to-end test suite execution.
   - Head 2: Type checks across both `server/` and `client/`.
-  - Head 3: Docker container build and launch test.
+  - Head 3: Docker container build and launch test (`scripts/docker-probe.sh`).
 - **Tag**: `checkpoint-step-10-full-delivery`.
 
 ---
