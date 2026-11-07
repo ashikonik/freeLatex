@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 
 import { askAi } from '../../lib/api.js';
+import { useEscapeToClose } from '../use-modal.js';
 import { readAiSettings } from './ai-settings.js';
 
 /** The properties of the error-fixing dialog. */
@@ -31,6 +32,8 @@ export function ErrorFixModal({
   const [fixed, setFixed] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const [working, setWorking] = useState(false);
+
+  useEscapeToClose(onClose);
 
   const fix = useCallback(async (): Promise<void> => {
     const settings = readAiSettings();
@@ -66,6 +69,7 @@ export function ErrorFixModal({
     >
       <div
         role="dialog"
+        aria-modal="true"
         aria-label="Fix the errors"
         data-testid="error-fix-modal"
         className="flex h-[80vh] w-full max-w-4xl flex-col rounded-lg bg-white shadow-xl"

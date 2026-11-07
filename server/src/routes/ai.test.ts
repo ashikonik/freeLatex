@@ -268,6 +268,94 @@ describe('POST /api/ai/complete', () => {
 
     expect(response.statusCode).toBe(403);
   });
+
+  it('reads the answer of Anthropic', async () => {
+    stubProvider({
+      content: [
+        { type: 'tool_use', id: 'x' },
+        { type: 'text', text: 'The answer.' },
+      ],
+    });
+
+    const response = await built.app.inject({
+      method: 'POST',
+      url: '/api/ai/complete',
+      headers: headersOf(),
+      payload: { provider: 'anthropic', prompt: 'Hello' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ text: 'The answer.' });
+  });
+
+  it('reads the answer of Gemini', async () => {
+    stubProvider({
+      candidates: [{ content: { parts: [{ text: 'The ' }, { text: 'answer.' }] } }],
+    });
+
+    const response = await built.app.inject({
+      method: 'POST',
+      url: '/api/ai/complete',
+      headers: headersOf(),
+      payload: { provider: 'gemini', prompt: 'Hello' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ text: 'The answer.' });
+  });
+
+  it('sends the key of the reader in the header Anthropic expects', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ content: [{ type: 'text', text: 'ok' }] }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await built.app.inject({
+      method: 'POST',
+      url: '/api/ai/complete',
+      headers: headersOf(),
+      payload: { provider: 'anthropic', prompt: 'Hello' },
+    });
+
+    const headers = upstreamHeaders(fetchMock);
+    expect(headers['x-api-key']).toBe(PROVIDER_KEY);
+    expect(headers.authorization).toBeUndefined();
+  });
+
+  it('sends the key of the reader in the header Gemini expects', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await built.app.inject({
+      method: 'POST',
+      url: '/api/ai/complete',
+      headers: headersOf(),
+      payload: { provider: 'gemini', prompt: 'Hello' },
+    });
+
+    const headers = upstreamHeaders(fetchMock);
+    expect(headers['x-goog-api-key']).toBe(PROVIDER_KEY);
+    expect(headers.authorization).toBeUndefined();
+  });
+
+  it('reports an answer that is empty', async () => {
+    stubProvider({ choices: [] });
+
+    const response = await built.app.inject({
+      method: 'POST',
+      url: '/api/ai/complete',
+      headers: headersOf(),
+      payload: { provider: 'openai', prompt: 'Hello' },
+    });
+
+    expect(response.statusCode).toBe(502);
+  });
 });
 
 /**

@@ -244,7 +244,7 @@ function buildPrompt(
  * Each provider wraps the answer differently, so the text is taken out of
  * the place that provider puts it.
  */
-export function extractText(provider: AiProvider, raw: string): string | undefined {
+function extractText(provider: AiProvider, raw: string): string | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);

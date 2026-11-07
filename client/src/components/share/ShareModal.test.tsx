@@ -135,4 +135,14 @@ describe('the share links of a project', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('whole number of days'));
     expect(createShareToken).not.toHaveBeenCalled();
   });
+
+  it('closes when the reader presses Escape', () => {
+    const onClose = vi.fn();
+
+    render(<ShareModal projectId="prj_1" onClose={onClose} />);
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(onClose).toHaveBeenCalled();
+  });
 });

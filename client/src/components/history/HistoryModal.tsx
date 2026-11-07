@@ -8,6 +8,7 @@ import {
   type SnapshotSummary,
 } from '../../lib/api.js';
 import { pairDiff, parseDiff } from './diff-view.js';
+import { useEscapeToClose } from '../use-modal.js';
 
 /** The properties of the history modal. */
 export interface HistoryModalProps {
@@ -44,6 +45,8 @@ export function HistoryModal({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | undefined>(undefined);
   const [restoring, setRestoring] = useState(false);
+
+  useEscapeToClose(onClose);
 
   useEffect(() => {
     let cancelled = false;
@@ -121,6 +124,7 @@ export function HistoryModal({
     >
       <div
         role="dialog"
+        aria-modal="true"
         aria-label="Document history"
         data-testid="history-modal"
         className="flex h-[80vh] w-full max-w-5xl flex-col rounded-lg bg-white shadow-xl"
@@ -240,7 +244,7 @@ function labelOf(snapshots: SnapshotSummary[], id: string): string {
 }
 
 /** The properties of one file's diff. */
-export interface DiffFileProps {
+interface DiffFileProps {
   /** The diff of the file. */
   diff: FileDiff;
 }
@@ -252,7 +256,7 @@ export interface DiffFileProps {
  * on one side leaves its place on the other side empty, which is what makes
  * the two columns line up.
  */
-export function DiffFile({ diff }: DiffFileProps): React.ReactElement {
+function DiffFile({ diff }: DiffFileProps): React.ReactElement {
   const sides = pairDiff(parseDiff(diff.patch));
 
   return (
@@ -302,7 +306,7 @@ export function DiffFile({ diff }: DiffFileProps): React.ReactElement {
  *
  * @param value The revision's timestamp.
  */
-export function formatWhen(value: string): string {
+function formatWhen(value: string): string {
   const when = new Date(value).getTime();
   if (Number.isNaN(when)) {
     return value;

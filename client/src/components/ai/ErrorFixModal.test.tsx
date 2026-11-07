@@ -109,4 +109,16 @@ describe('the one-click error fix', () => {
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('could not be reached'));
   });
+
+  it('closes when the reader presses Escape', () => {
+    const onClose = vi.fn();
+
+    render(
+      <ErrorFixModal errors={ERRORS} source={SOURCE} onApply={vi.fn()} onClose={onClose} />,
+    );
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(onClose).toHaveBeenCalled();
+  });
 });

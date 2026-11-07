@@ -8,6 +8,7 @@ import {
   type SharePermission,
   type ShareToken,
 } from '../../lib/api.js';
+import { useEscapeToClose } from '../use-modal.js';
 
 /** The properties of the share modal. */
 export interface ShareModalProps {
@@ -33,6 +34,8 @@ export function ShareModal({ projectId, onClose }: ShareModalProps): React.React
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
+
+  useEscapeToClose(onClose);
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -113,6 +116,7 @@ export function ShareModal({ projectId, onClose }: ShareModalProps): React.React
     >
       <div
         role="dialog"
+        aria-modal="true"
         aria-label="Share"
         data-testid="share-modal"
         className="flex max-h-[80vh] w-full max-w-lg flex-col rounded-lg bg-white shadow-xl"

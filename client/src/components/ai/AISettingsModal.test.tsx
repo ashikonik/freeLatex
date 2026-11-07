@@ -62,4 +62,14 @@ describe('the assistant settings', () => {
     expect(screen.getByTestId('ai-api-key')).toHaveValue('');
     expect(onForgotten).toHaveBeenCalled();
   });
+
+  it('closes when the reader presses Escape', () => {
+    const onClose = vi.fn();
+
+    render(<AISettingsModal onClose={onClose} onSaved={vi.fn()} />);
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(onClose).toHaveBeenCalled();
+  });
 });

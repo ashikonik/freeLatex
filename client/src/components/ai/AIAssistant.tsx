@@ -35,6 +35,15 @@ export const ASSISTANT_TASKS = [
 /** One of the assistant's tasks. */
 export type AssistantTask = (typeof ASSISTANT_TASKS)[number]['id'];
 
+/**
+ * How much of the document is sent to the provider.
+ *
+ * A whole thesis is more than any provider's context holds and more than
+ * the reader wants to pay for, so only the beginning of the document is
+ * sent. The reader is told when that happens.
+ */
+export const MAX_SOURCE_CHARS = 12_000;
+
 /** The properties of the assistant. */
 export interface AIAssistantProps {
   /** The source the assistant is working on. */
@@ -57,6 +66,8 @@ export function AIAssistant({ source, onApply }: AIAssistantProps): React.ReactE
   const [question, setQuestion] = useState('');
   const [answer, setAnswer] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
+  /** A note about what was sent, as opposed to a failure. */
+  const [notice, setNotice] = useState<string | undefined>(undefined);
   const [asking, setAsking] = useState(false);
 
   const ask = useCallback(async (): Promise<void> => {
@@ -72,11 +83,19 @@ export function AIAssistant({ source, onApply }: AIAssistantProps): React.ReactE
 
     setAsking(true);
     setError(undefined);
+    setNotice(undefined);
     setAnswer(undefined);
     try {
+      const trimmed =
+        source.length > MAX_SOURCE_CHARS ? source.slice(0, MAX_SOURCE_CHARS) : source;
+      if (trimmed.length < source.length) {
+        setNotice(
+          'The document is longer than the assistant takes, so only its beginning was sent.',
+        );
+      }
       const text = await askAi(settings.provider, settings.apiKey, {
         prompt: question.trim() ? `${chosen.prompt}\n\n${question.trim()}` : chosen.prompt,
-        source,
+        source: trimmed,
       });
       setAnswer(text);
     } catch (cause) {
@@ -144,6 +163,10 @@ export function AIAssistant({ source, onApply }: AIAssistantProps): React.ReactE
           <p role="alert" className="mt-3 rounded bg-red-50 p-2 text-xs text-red-700">
             {error}
           </p>
+        ) : null}
+
+        {notice ? (
+          <p className="mt-3 rounded bg-amber-50 p-2 text-xs text-amber-800">{notice}</p>
         ) : null}
 
         {answer ? (

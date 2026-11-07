@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { useEscapeToClose } from '../use-modal.js';
 import {
   PROVIDER_NAMES,
   clearAiSettings,
@@ -42,6 +43,8 @@ export function AISettingsModal({
   const [apiKey, setApiKey] = useState(stored?.apiKey ?? '');
   const [error, setError] = useState<string | undefined>(undefined);
 
+  useEscapeToClose(onClose);
+
   const save = (): void => {
     const key = apiKey.trim();
     // Saving an empty key would leave the reader with an assistant that
@@ -63,6 +66,7 @@ export function AISettingsModal({
     >
       <div
         role="dialog"
+        aria-modal="true"
         aria-label="Assistant settings"
         data-testid="ai-settings-modal"
         className="w-full max-w-md rounded-lg bg-white p-4 shadow-xl"

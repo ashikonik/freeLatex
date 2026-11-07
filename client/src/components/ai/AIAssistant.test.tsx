@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
-import { AIAssistant } from './AIAssistant.js';
+import { AIAssistant, MAX_SOURCE_CHARS } from './AIAssistant.js';
 import { storeAiSettings } from './ai-settings.js';
 
 const askAi = vi.hoisted(() => vi.fn());
@@ -109,5 +109,30 @@ describe('the writing assistant', () => {
     // sending the one that was forgotten.
     expect(screen.getByTestId('ai-settings-modal')).toBeInTheDocument();
     expect(askAi).not.toHaveBeenCalled();
+  });
+
+  it('sends only the beginning of a document that is too long', async () => {
+    storeAiSettings({ provider: 'openai', apiKey: 'sk-test' });
+    askAi.mockResolvedValue('The polished text.');
+    const source = 'x'.repeat(MAX_SOURCE_CHARS + 500);
+
+    render(<AIAssistant source={source} onApply={vi.fn()} />);
+
+    fireEvent.click(screen.getByTestId('ai-ask'));
+
+    await waitFor(() => expect(askAi).toHaveBeenCalledTimes(1));
+    const [, , body] = askAi.mock.calls[0] as [string, string, { source: string }];
+    expect(body.source).toHaveLength(MAX_SOURCE_CHARS);
+  });
+
+  it('says that only part of the document was sent', async () => {
+    storeAiSettings({ provider: 'openai', apiKey: 'sk-test' });
+    askAi.mockResolvedValue('The polished text.');
+
+    render(<AIAssistant source={'x'.repeat(MAX_SOURCE_CHARS + 500)} onApply={vi.fn()} />);
+
+    fireEvent.click(screen.getByTestId('ai-ask'));
+
+    await waitFor(() => expect(screen.getByText(/only its beginning was sent/)).toBeInTheDocument());
   });
 });

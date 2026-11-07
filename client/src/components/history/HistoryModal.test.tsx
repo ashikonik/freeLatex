@@ -100,4 +100,14 @@ describe('the document history', () => {
     expect(file).toHaveTextContent('old');
     expect(file).toHaveTextContent('new');
   });
+
+  it('closes when the reader presses Escape', () => {
+    const onClose = vi.fn();
+
+    render(<HistoryModal projectId="prj_1" onClose={onClose} onRestored={vi.fn()} />);
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(onClose).toHaveBeenCalled();
+  });
 });
