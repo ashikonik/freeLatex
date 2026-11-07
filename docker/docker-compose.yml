@@ -1,0 +1,52 @@
+# freeLatex — a single-container deployment.
+#
+# The server, the client and the compiler all live in one image, so the
+# whole application is one service on one port.
+#
+# The master key is read from the environment. Put it in a `.env` file next
+# to this file, or export it before running `docker compose up`:
+#
+#     ADMIN_API_KEY=a-long-random-string
+#     AUTH_MODE=single
+
+services:
+  freelatex:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        # The BusyTeX WebAssembly assets make the instant preview work in the
+        # browser. They are large, so set this to "false" for a smaller
+        # image that only offers the server-side build.
+        WITH_WASM: "${WITH_WASM:-true}"
+    image: freelatex:latest
+    container_name: freelatex
+    restart: unless-stopped
+    ports:
+      - "${FREELATEX_PORT:-3030}:3030"
+    environment:
+      ADMIN_API_KEY: "${ADMIN_API_KEY:?ADMIN_API_KEY must be set}"
+      AUTH_MODE: "${AUTH_MODE:-single}"
+      PORT: "3030"
+      HOST: "0.0.0.0"
+      DATA_DIR: "/app/data"
+      STATIC_DIR: "/app/public"
+      COMPILE_TIMEOUT_MS: "${COMPILE_TIMEOUT_MS:-30000}"
+      NODE_ENV: "production"
+    volumes:
+      # The database and the projects' files live here, so they survive a
+      # new image.
+      - freelatex_data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3030/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  freelatex_data:
