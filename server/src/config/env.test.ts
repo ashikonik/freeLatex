@@ -67,4 +67,15 @@ describe('loadEnv', () => {
   it('trims surrounding whitespace from ADMIN_API_KEY', () => {
     expect(loadEnv({ ...BASE, ADMIN_API_KEY: '  padded-key  ' }).adminApiKey).toBe('padded-key');
   });
+
+  it('serves no static files when STATIC_DIR is not set', () => {
+    expect(loadEnv(BASE).staticDir).toBe('');
+  });
+
+  it('resolves STATIC_DIR to an absolute path', () => {
+    const env = loadEnv({ ...BASE, STATIC_DIR: 'client/dist' });
+
+    expect(env.staticDir.startsWith('/')).toBe(true);
+    expect(env.staticDir.endsWith('/client/dist')).toBe(true);
+  });
 });

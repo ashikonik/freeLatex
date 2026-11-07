@@ -11,6 +11,8 @@ import { projectRoutes } from './routes/projects.js';
 import { shareRoutes } from './routes/share.js';
 import { snapshotRoutes } from './routes/snapshots.js';
 import { compileRoutes } from './routes/compile.js';
+import { aiRoutes } from './routes/ai.js';
+import { staticRoutes } from './routes/static.js';
 import { yjsRoutes } from './services/yjs.js';
 import { ProjectStorage } from './services/storage.js';
 import { SnapshotService } from './services/snapshot.js';
@@ -99,6 +101,7 @@ export async function buildApp(options: AppOptions = {}): Promise<BuiltApp> {
       storage,
       compileTimeoutMs: env.compileTimeoutMs,
     });
+    await scoped.register(aiRoutes);
   });
 
   app.setErrorHandler((error: FastifyError, request, reply) => {
@@ -108,6 +111,11 @@ export async function buildApp(options: AppOptions = {}): Promise<BuiltApp> {
       error: statusCode === 500 ? 'Internal server error.' : error.message,
     });
   });
+
+  // The client's own files are served last, so that the API routes above
+  // keep their own answers. A deployment that ships one container needs
+  // this; a development run does not set STATIC_DIR and is unaffected.
+  await staticRoutes(app, env.staticDir);
 
   return { app, env, db };
 }

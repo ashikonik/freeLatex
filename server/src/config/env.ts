@@ -13,6 +13,15 @@ export interface Env {
   readonly dataDir: string;
   readonly compileTimeoutMs: number;
   readonly nodeEnv: string;
+  /**
+   * The directory holding the client's built files.
+   *
+   * When it is set, the server serves the client itself, so that a single
+   * process is the whole application. When it is empty — the case in
+   * development, where Vite serves the client and proxies the API — the
+   * server answers the API alone.
+   */
+  readonly staticDir: string;
 }
 
 export class EnvError extends Error {
@@ -71,6 +80,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
       'COMPILE_TIMEOUT_MS',
     ),
     nodeEnv: source.NODE_ENV?.trim() || 'development',
+    staticDir: source.STATIC_DIR?.trim() ? resolve(source.STATIC_DIR.trim()) : '',
   };
 }
 
