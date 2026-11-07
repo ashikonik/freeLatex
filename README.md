@@ -13,7 +13,7 @@
 - **Multiplayer CRDT Editor**: Low-latency collaborative editing powered by **CodeMirror 6** and **Yjs** with color-coded cursors, presence tags, and conflict-free merging.
 - **Hybrid Compilation Engine**:
   - **Client-Side WebAssembly**: Instant in-browser compilation with zero server latency.
-  - **Server-Side Tectonic**: Full CTAN package support, BibTeX citations, and high-performance compilation under a lightweight footprint (<300MB Docker image).
+  - **Server-Side Tectonic**: Full CTAN package support, BibTeX citations, and high-performance compilation from a single container (see [Docker](#3-docker-deployment) for the image sizes).
 - **Bidirectional SyncTeX**: Jump from LaTeX code directly to the corresponding PDF element, or double-click the PDF to jump back to the exact source line.
 - **LetX AI Assistant (BYOK)**:
   - Bring your own API key (Gemini, OpenAI, Anthropic).
@@ -32,7 +32,7 @@ Detailed project architecture and implementation phases are documented in:
 freeLatex/
 ├── client/                     # Vite + React + CodeMirror 6 + PDF.js
 ├── server/                     # Fastify + TypeScript + Yjs WebSocket + Tectonic
-├── docker/                     # Lightweight Dockerfile (<300MB) & docker-compose
+├── docker/                     # Multi-stage Dockerfile & docker-compose
 ├── data/                       # SQLite DB (freelatex.db) and project files
 ├── ARCHITECTURE.md             # System design and protocol specification
 ├── IMPLEMENTATION_PLAN.md      # Step-by-step implementation roadmap
