@@ -132,3 +132,54 @@ export function authenticateRequest(
   }
   return fail('No credentials provided.');
 }
+
+/**
+ * The prefixes a share token carries.
+ *
+ * The prefix is what tells a share token apart from an API key without
+ * consulting the database, which is what a WebSocket upgrade needs: the
+ * browser's WebSocket API cannot set request headers, so the credential has
+ * to travel in the query string, where both kinds of token can appear.
+ */
+const SHARE_TOKEN_PREFIXES = ['rw_', 'ro_'] as const;
+
+/**
+ * True when a credential is shaped like a share token.
+ */
+export function isShareTokenShape(token: string): boolean {
+  return SHARE_TOKEN_PREFIXES.some((prefix) => token.startsWith(prefix));
+}
+
+/**
+ * Resolve an identity from a WebSocket upgrade request.
+ *
+ * The credential may arrive in the `Authorization` header or in the query
+ * string. The query string is needed because the browser's WebSocket API
+ * cannot set headers, so a browser client has nowhere else to put its key.
+ *
+ * A credential in the header is always an API key, because the header is the
+ * account credential in the REST API. A credential in the query string is
+ * judged by its shape: a `rw_`/`ro_` prefix means a share token, anything
+ * else is an API key.
+ */
+export function authenticateWebSocket(
+  context: AuthContext,
+  request: { authorization?: string; token?: string },
+  now: Date = new Date(),
+): AuthResult {
+  const bearer = parseBearer(request.authorization);
+  if (bearer) {
+    return authenticateApiKey(context, bearer);
+  }
+
+  const token = request.token?.trim();
+  if (!token) {
+    return fail('No credentials provided.');
+  }
+
+  if (isShareTokenShape(token)) {
+    return authenticateShareToken(context, token, now);
+  }
+
+  return authenticateApiKey(context, token);
+}

@@ -292,6 +292,92 @@ async function main(): Promise<void> {
         if ((inverse.json().source as { line: number }).line !== 5) {
           throw new Error('probe: inverse search did not return the same line');
         }
+
+        // Step 7: the collaboration socket must accept a real WebSocket
+        // handshake and two clients must converge on the same text. The
+        // socket cannot be exercised through `inject`, so the server is
+        // asked to listen on an ephemeral port for the duration.
+        await app.listen({ port: 0, host: '127.0.0.1' });
+        const address = app.server.address();
+        if (typeof address !== 'object' || address === null) {
+          throw new Error('probe: the server did not report a listening address');
+        }
+
+        const { WebsocketProvider } = await import('y-websocket');
+        const Y = await import('yjs');
+        const { encodeRoomName, nodeWebSocketPolyfill } = await import(
+          './services/yjs.js',
+        );
+
+        const room = encodeRoomName(projectId, 'main.tex');
+        const credential = env.adminApiKey;
+
+        const makeClient = async (): Promise<{
+          doc: InstanceType<typeof Y.Doc>;
+          provider: InstanceType<typeof WebsocketProvider>;
+          text: ReturnType<InstanceType<typeof Y.Doc>['getText']>;
+        }> => {
+          const doc = new Y.Doc();
+          const provider = new WebsocketProvider(
+            `ws://127.0.0.1:${address.port}/ws`,
+            room,
+            doc,
+            {
+              params: { token: credential },
+              WebSocketPolyfill: nodeWebSocketPolyfill(),
+              connect: true,
+            },
+          );
+
+          const deadline = Date.now() + 5_000;
+          while (Date.now() < deadline) {
+            if (provider.wsconnected && provider.synced) {
+              break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          }
+          if (!provider.wsconnected) {
+            throw new Error('probe: the collaboration socket refused the connection');
+          }
+          if (!provider.synced) {
+            throw new Error('probe: the collaboration socket did not synchronise');
+          }
+
+          return { doc, provider, text: doc.getText('content') };
+        };
+
+        const first = await makeClient();
+        const collaborator = await makeClient();
+        try {
+          // The room is seeded with the file on disk, so the text the two
+          // clients share starts as the compiled document's source.
+          const seeded = first.text.toString();
+          if (!seeded.includes('Probe body')) {
+            throw new Error(
+              `probe: the room was not seeded from the file on disk (got "${seeded}")`,
+            );
+          }
+
+          first.text.insert(0, 'Probe edit.');
+
+          const deadline = Date.now() + 5_000;
+          while (
+            Date.now() < deadline &&
+            collaborator.text.toString() !== `Probe edit.${seeded}`
+          ) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          }
+          if (collaborator.text.toString() !== `Probe edit.${seeded}`) {
+            throw new Error(
+              `probe: the two clients did not converge (got "${collaborator.text.toString()}")`,
+            );
+          }
+        } finally {
+          first.provider.destroy();
+          first.doc.destroy();
+          collaborator.provider.destroy();
+          collaborator.doc.destroy();
+        }
       } finally {
         await app.close();
       }

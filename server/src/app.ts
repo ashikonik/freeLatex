@@ -11,6 +11,7 @@ import { projectRoutes } from './routes/projects.js';
 import { shareRoutes } from './routes/share.js';
 import { snapshotRoutes } from './routes/snapshots.js';
 import { compileRoutes } from './routes/compile.js';
+import { yjsRoutes } from './services/yjs.js';
 import { ProjectStorage } from './services/storage.js';
 import { SnapshotService } from './services/snapshot.js';
 import { join } from 'node:path';
@@ -77,6 +78,12 @@ export async function buildApp(options: AppOptions = {}): Promise<BuiltApp> {
   // endpoint that *establishes* credentials, so it receives the API key in the
   // request body and validates it itself.
   await app.register(loginRoutes, { context });
+
+  // The collaboration socket is registered outside the guarded scope for the
+  // same reason: a WebSocket upgrade carries its credentials in the request's
+  // headers and query string, and the socket handler validates them itself
+  // before any document is touched.
+  await app.register(yjsRoutes, { context, storage });
 
   // Every other /api route requires credentials. Share tokens are accepted on
   // the project-scoped routes; the guard picks whichever is present.
