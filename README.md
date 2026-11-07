@@ -80,8 +80,8 @@ To build a smaller image without the in-browser preview:
 ```bash
 docker build -f docker/Dockerfile --build-arg WITH_WASM=false -t freelatex .
 ```
-That image skips the BusyTeX WebAssembly assets (520 MB) and offers the
-**🖥️ Server Tectonic Build** mode only.
+That image skips the BusyTeX WebAssembly assets (520 MB), weighs 566 MB
+instead of 1.1 GB, and offers the **🖥️ Server Tectonic Build** mode only.
 
 ### 4. Frontend
 ```bash
