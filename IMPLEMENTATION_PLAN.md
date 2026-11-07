@@ -301,7 +301,7 @@ The implementation is broken down into **10 granular, sequential micro-steps**. 
     (120 MB) plus the base system (114 MB), and the BusyTeX WebAssembly assets
     alone are 520 MB — the two targets are mutually exclusive. A build with
     `--build-arg WITH_WASM=false` omits the assets and offers the server-side
-    build only.
+    build only. The full image, with the assets, weighs 1.82 GB.
   - Tectonic is bundled as the statically-linked musl build, and its format
     bundle is fetched while the image is built, so a fresh container compiles
     a document at once rather than timing out on the first download.
@@ -309,9 +309,11 @@ The implementation is broken down into **10 granular, sequential micro-steps**. 
   - Head 1: Full end-to-end test suite execution.
   - Head 2: Type checks across both `server/` and `client/`.
   - Head 3: Docker container build and launch test (`scripts/docker-probe.sh`).
-    The probe passed against `freelatex:nowasm`: the health check answered,
-    the client's page was served, Tectonic 0.15.0 was in the container, and a
-    document compiled to a real PDF in 0.57 s.
+    The probe passed against both `freelatex:nowasm` and `freelatex:latest`:
+    the health check answered, the client's page was served, Tectonic 0.15.0
+    was in the container, and a document compiled to a real PDF in half a
+    second. The full image serves the WebAssembly compiler as well — its
+    `busytex.wasm` comes back at 32.5 MB.
   - A deeper probe against the same container confirmed the rest of the
     surface: a read-only share token reads the project but is refused by the
     assistant (403), snapshots and their differences are produced, an unknown
