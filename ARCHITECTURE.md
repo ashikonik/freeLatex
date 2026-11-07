@@ -13,7 +13,7 @@ flowchart TB
         CM["CodeMirror 6 LaTeX Editor"]
         YDoc["Yjs CRDT Document"]
         PDFV["PDF.js Viewer + SyncTeX Overlay"]
-        WasmCompiler["Client-Side Wasm Compiler (Worker)"]
+        WasmCompiler["Client-Side BusyTeX Wasm Compiler (Worker)"]
         AIService["AI Assistant (BYOK Client: Gemini Free Tier / OpenAI / Claude)"]
         HistoryUI["Version Control & Diff Viewer"]
 
@@ -59,8 +59,16 @@ flowchart TB
     PDFV -->|SyncTeX Inverse Jump| CM
     UI -->|Compile (Server Mode)| Gateway
     Gateway -->|PDF Stream + SyncTeX Data| PDFV
-    AIService -->|Free API Key (localStorage)| LLM
+    AIService -->|Prompt + key in a header| Gateway
+    Gateway -->|Provider key in its own header| LLM
 ```
+
+The assistant's key lives in the browser and is never stored by the server.
+The browser sends it to the server's `/api/ai/complete` route in a header of
+its own, because the `Authorization` header already carries the workspace's
+own key; the server forwards it to the provider and keeps nothing. A shared
+link cannot reach that route, so a share token never spends the owner's
+paid provider key.
 
 ---
 
@@ -71,7 +79,7 @@ freeLatex is engineered to run at **zero recurring software or API cost**:
 | Component | Free-Tier Technology | Cost | Description |
 |---|---|---|---|
 | **LaTeX Engine (Server)** | **Tectonic** | **$0** | Open-source compiler that auto-downloads only the CTAN packages actually imported by the document. |
-| **LaTeX Engine (Client)** | **SwiftLaTeX WebAssembly** | **$0** | Compiles in the user's browser thread; zero server CPU and works offline. |
+| **LaTeX Engine (Client)** | **BusyTeX WebAssembly** | **$0** | Compiles in the user's browser thread; zero server CPU and works offline. |
 | **AI Assistant** | **Google Gemini Free Tier (BYOK)** | **$0** | 15 RPM / 1 million TPM free via Google AI Studio API key. Users input their own key; server incurs $0 cost. |
 | **Real-time Sync** | **Yjs + Fastify WebSockets** | **$0** | Self-hosted CRDT synchronization. No paid services (e.g. Liveblocks/Pusher). |
 | **Database** | **SQLite (`better-sqlite3`)** | **$0** | Single file on disk (`freelatex.db`). No hosted DB fees. |
