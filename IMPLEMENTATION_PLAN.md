@@ -312,6 +312,12 @@ The implementation is broken down into **10 granular, sequential micro-steps**. 
     The probe passed against `freelatex:nowasm`: the health check answered,
     the client's page was served, Tectonic 0.15.0 was in the container, and a
     document compiled to a real PDF in 0.57 s.
+  - A deeper probe against the same container confirmed the rest of the
+    surface: a read-only share token reads the project but is refused by the
+    assistant (403), snapshots and their differences are produced, an unknown
+    API path is a JSON 404 rather than the page, an application path is the
+    page, and two clients of the collaboration socket see each other's
+    writes.
 - **Tag**: `checkpoint-step-10-full-delivery`.
 
 ---
