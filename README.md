@@ -27,12 +27,13 @@
 Detailed project architecture and implementation phases are documented in:
 - 📑 [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) — Comprehensive technical roadmap and phase deliverables.
 - 📐 [ARCHITECTURE.md](ARCHITECTURE.md) — Deep dive into the Dual-Mode auth, Yjs sync protocol, compiler engines, and SyncTeX design.
+- 🚀 [docker/DEPLOY.md](docker/DEPLOY.md) — Putting it on a free cloud service, with the free tiers that can and cannot host it.
 
 ```
 freeLatex/
 ├── client/                     # Vite + React + CodeMirror 6 + PDF.js
 ├── server/                     # Fastify + TypeScript + Yjs WebSocket + Tectonic
-├── docker/                     # Multi-stage Dockerfile & docker-compose
+├── docker/                     # Multi-stage Dockerfile, docker-compose & deployment guide
 ├── ARCHITECTURE.md             # System design and protocol specification
 ├── IMPLEMENTATION_PLAN.md      # Step-by-step implementation roadmap
 └── README.md                   # Project overview & quickstart
@@ -148,6 +149,7 @@ a container, pass them with `-e`.
 | `HOST` | `0.0.0.0` | The address the listener binds. |
 | `DATA_DIR` | `data` | Where the SQLite database and the project files live. |
 | `COMPILE_TIMEOUT_MS` | `30000` | How long a LaTeX compilation may run before it is killed. |
+| `MAX_CONCURRENT_COMPILATIONS` | the core count, capped at 4 | How many compilations may run at once. Each one is a whole TeX engine and wants about 190 MB, so a small host should set this to 1. |
 | `STATIC_DIR` | — | The client's built files. Set it to serve the client from the server, so the whole application is one origin. |
 | `CORS_ORIGIN` | — | The one origin allowed to call the API from a browser. Leave it unset unless the client is served from somewhere else. |
 | `NODE_ENV` | `development` | The usual environment name. |

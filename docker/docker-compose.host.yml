@@ -1,0 +1,61 @@
+# freeLatex — deployment on a host that has its own disk.
+#
+# This is the compose file for a single virtual machine: a real server with
+# a disk that outlives the container. The Docker volume of the ordinary
+# compose file lives inside Docker's own storage, which is fine on a laptop
+# but not on a host where the data has to survive a reinstall.
+#
+# The data lives on a mounted block volume instead, so the documents are
+# still there after the machine is rebuilt.
+#
+#     export ADMIN_API_KEY="$(openssl rand -hex 32)"
+#     docker compose -f docker-compose.host.yml up -d
+#
+# The reverse proxy in front of it is expected to terminate TLS; see
+# caddy/Caddyfile for the shape of that.
+
+services:
+  freelatex:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        # The BusyTeX WebAssembly assets make the instant preview work in the
+        # browser. They are 727 MB, so a host that is tight on disk can
+        # leave them out and offer the server-side build only.
+        WITH_WASM: "${WITH_WASM:-false}"
+    image: "${FREELATEX_IMAGE:-freelatex:latest}"
+    container_name: freelatex
+    restart: unless-stopped
+    ports:
+      # Bound to the loopback only, because the reverse proxy in front is
+      # the one that should be reached from the internet.
+      - "127.0.0.1:3030:3030"
+    environment:
+      ADMIN_API_KEY: "${ADMIN_API_KEY:?ADMIN_API_KEY must be set}"
+      AUTH_MODE: "${AUTH_MODE:-single}"
+      PORT: "3030"
+      HOST: "0.0.0.0"
+      DATA_DIR: "/app/data"
+      STATIC_DIR: "/app/public"
+      COMPILE_TIMEOUT_MS: "${COMPILE_TIMEOUT_MS:-30000}"
+      MAX_CONCURRENT_COMPILATIONS: "${MAX_CONCURRENT_COMPILATIONS:-2}"
+      NODE_ENV: "production"
+    volumes:
+      # The database and the projects' files live here, so they survive a
+      # new image.
+      - "${FREELATEX_DATA_DIR:-/mnt/data/freelatex}:/app/data"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3030/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    # The compiler writes its temporary files into the image's own cache
+    # directory, which is where the warmed bundle was copied to.
+    tmpfs:
+      - /tmp:size=512m

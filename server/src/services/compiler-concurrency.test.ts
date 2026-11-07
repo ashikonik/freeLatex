@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -93,4 +93,39 @@ describe('the compilation limit', () => {
     // The gate has to actually let work through, not refuse all of it.
     expect(peak).toBeGreaterThan(0);
   }, 30_000);
+});
+
+describe('the limit when the host asks for a different one', () => {
+  const original = process.env.MAX_CONCURRENT_COMPILATIONS;
+
+  afterEach(() => {
+    if (original === undefined) {
+      delete process.env.MAX_CONCURRENT_COMPILATIONS;
+    } else {
+      process.env.MAX_CONCURRENT_COMPILATIONS = original;
+    }
+    vi.resetModules();
+  });
+
+  it('follows the setting, so a small host can afford fewer builds at once', async () => {
+    // A host with half a gigabyte of memory can afford one build at a
+    // time: the compiler alone wants about 190 megabytes.
+    process.env.MAX_CONCURRENT_COMPILATIONS = '1';
+
+    // The limit is read when the module is loaded, so the module has to be
+    // loaded afresh to see the setting.
+    vi.resetModules();
+    const fresh = await import('./compiler.js');
+
+    expect(fresh.compilationLimit).toBe(1);
+  });
+
+  it('ignores a setting that is not a whole number of at least one', async () => {
+    process.env.MAX_CONCURRENT_COMPILATIONS = '0';
+
+    vi.resetModules();
+    const fresh = await import('./compiler.js');
+
+    expect(fresh.compilationLimit).toBeGreaterThanOrEqual(1);
+  });
 });

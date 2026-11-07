@@ -1,0 +1,38 @@
+# freeLatex — the reverse proxy in front of the container.
+#
+# Caddy obtains and renews the certificate on its own, so the deployment
+# needs no certificate handling of its own. The domain below is the one the
+# co-editors will use, so it has to be a name that resolves to the host.
+#
+# The proxy must carry the WebSocket upgrade, or the collaborative editor
+# falls back to polling and the cursors stop moving. Caddy does this by
+# itself; there is nothing to turn on.
+
+freelatex.example.com {
+	# The certificate is issued for the name above. The addresses of the
+	# host itself are not listed, because the certificate would not cover
+	# them.
+	encode zstd gzip
+
+	reverse_proxy 127.0.0.1:3030 {
+		# A compilation can take as long as the server's own budget
+		# allows, which is 30 seconds by default. The proxy's default
+		# timeout is shorter than that, so a slow document would be cut
+		# off before the compiler finished.
+		transport http {
+			read_timeout 120s
+			write_timeout 120s
+		}
+	}
+
+	# The editor is a long-lived connection, so the proxy must not time it
+	# out while the document is being worked on.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# The editor draws text on a canvas and the preview shows a PDF,
+	# so the page may not be framed by another site.
+		X-Frame-Options "DENY"
+	}
+}

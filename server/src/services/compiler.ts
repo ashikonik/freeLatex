@@ -267,8 +267,21 @@ interface ProcessResult {
  * takes every core and every megabyte of the server, and the other tenants
  * wait. The queue keeps the machine usable: the builds wait their turn
  * rather than all starting at once.
+ *
+ * The limit follows the machine's own cores, but it can be set down with
+ * MAX_CONCURRENT_COMPILATIONS. A small host needs that: the compiler wants
+ * about 190 megabytes while it runs, so a machine with half a gigabyte of
+ * memory can afford one build at a time and no more.
  */
-const MAX_CONCURRENT_COMPILATIONS = Math.max(1, Math.min(4, cpus().length));
+function resolveCompilationLimit(): number {
+  const configured = Number.parseInt(process.env.MAX_CONCURRENT_COMPILATIONS ?? '', 10);
+  if (Number.isInteger(configured) && configured >= 1) {
+    return configured;
+  }
+  return Math.max(1, Math.min(4, cpus().length));
+}
+
+const MAX_CONCURRENT_COMPILATIONS = resolveCompilationLimit();
 
 /**
  * How many compilations may run at the same time.
