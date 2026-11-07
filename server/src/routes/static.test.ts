@@ -86,6 +86,20 @@ describe('the client served by the server', () => {
     expect(response.statusCode).toBe(404);
   });
 
+  it('does not let the page stand in for the API when a query is asked for', async () => {
+    // The URL of the request carries the query as well as the path, so the
+    // path has to be looked at on its own.
+    const response = await built.app.inject({ method: 'GET', url: '/api?health=1' });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('does not let the page stand in for the WebSocket when a query is asked for', async () => {
+    const response = await built.app.inject({ method: 'GET', url: '/ws?room=prj_1' });
+
+    expect(response.statusCode).toBe(404);
+  });
+
   it('does not let the browser cache the page', async () => {
     const response = await built.app.inject({ method: 'GET', url: '/' });
 

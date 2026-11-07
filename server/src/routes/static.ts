@@ -45,13 +45,16 @@ export async function staticRoutes(
   // The application itself is a single page, so a path that is not a file
   // of the build is answered with the page rather than with a 404.
   app.setNotFoundHandler((request, reply) => {
+    // The path is taken on its own: the URL of the request carries the query
+    // as well, and a query must not let the page stand in for the API.
+    const path = request.url.split('?')[0] ?? request.url;
     // `/api` without a trailing slash is the API too, and `/ws` is the
     // WebSocket's path, so neither is the application.
     if (
-      request.url === '/api' ||
-      request.url.startsWith('/api/') ||
-      request.url === '/ws' ||
-      request.url.startsWith('/ws/')
+      path === '/api' ||
+      path.startsWith('/api/') ||
+      path === '/ws' ||
+      path.startsWith('/ws/')
     ) {
       return reply.status(404).send({ error: 'Not found.' });
     }
