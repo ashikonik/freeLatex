@@ -6,6 +6,8 @@
  * than from the context directly, which keeps this module free of React.
  */
 
+import type { AiProvider } from '../components/ai/ai-settings.js';
+
 /** The shape of a project as the API reports it. */
 export interface Project {
   id: string;
@@ -65,15 +67,23 @@ export function setApiKeyProvider(provider: KeyProvider): void {
  * Perform an authenticated request against the API.
  *
  * @param path The path below `/api`.
- * @param options The request options. `body` is sent as JSON.
+ * @param options The request options. `body` is sent as JSON, and `headers`
+ *   are added to the ones the client always sends.
  */
 export async function apiRequest<T>(
   path: string,
-  options: { method?: string; body?: unknown; raw?: boolean } = {},
+  options: {
+    method?: string;
+    body?: unknown;
+    raw?: boolean;
+    headers?: Record<string, string>;
+  } = {},
 ): Promise<T> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...options.headers };
   const key = readKey();
-  if (key) {
+  // The caller's own header wins, so a request can say something different
+  // about who it is on purpose.
+  if (key && !('authorization' in headers)) {
     headers.authorization = `Bearer ${key}`;
   }
   if (options.body !== undefined) {
@@ -320,4 +330,149 @@ export function encodePath(path: string): string {
     .split('/')
     .map((segment) => encodeURIComponent(segment))
     .join('/');
+}
+
+/** A revision of a project, without its file contents. */
+export interface SnapshotSummary {
+  id: string;
+  projectId: string;
+  label: string;
+  hash: string;
+  /** The author of the revision, or undefined for a shared edit. */
+  createdBy: string | null;
+  createdAt: string;
+  /** How many files the revision holds. */
+  fileCount: number;
+}
+
+/** The unified diff of one file between two revisions. */
+export interface FileDiff {
+  path: string;
+  /** 'added' when the file only exists in the newer revision. */
+  changeType: 'added' | 'removed' | 'modified';
+  /** The unified diff. Empty when the file is unchanged. */
+  patch: string;
+  addedLines: number;
+  removedLines: number;
+}
+
+/** List a project's revisions, newest first. */
+export function listSnapshots(projectId: string): Promise<{ snapshots: SnapshotSummary[] }> {
+  return apiRequest<{ snapshots: SnapshotSummary[] }>(`/projects/${projectId}/snapshots`);
+}
+
+/**
+ * The diff between a revision and another one.
+ *
+ * The other revision defaults to the newest one, so a client can ask "what
+ * changed since this revision" without tracking the head itself.
+ */
+export function diffSnapshot(
+  projectId: string,
+  snapshotId: string,
+  against?: string,
+): Promise<{ from: string; to: string; diffs: FileDiff[] }> {
+  const query = against ? `?against=${encodeURIComponent(against)}` : '';
+  return apiRequest<{ from: string; to: string; diffs: FileDiff[] }>(
+    `/projects/${projectId}/snapshots/${encodeURIComponent(snapshotId)}/diff${query}`,
+  );
+}
+
+/** Restore a project to one of its revisions. */
+export function rollbackToSnapshot(
+  projectId: string,
+  snapshotId: string,
+): Promise<{ restored: boolean; fileCount: number }> {
+  return apiRequest<{ restored: boolean; fileCount: number }>(
+    `/projects/${projectId}/snapshots/${encodeURIComponent(snapshotId)}/rollback`,
+    { method: 'POST' },
+  );
+}
+
+/** How much a share link allows. */
+export type SharePermission = 'rw' | 'ro';
+
+/** A share link that already exists. */
+export interface ShareToken {
+  id: string;
+  permission: SharePermission;
+  label: string | null;
+  createdAt: string;
+  expiresAt: string | null;
+  /** Whether the link has run out. */
+  expired: boolean;
+}
+
+/**
+ * A share link that was just created.
+ *
+ * The plaintext token is only ever returned once, so it is part of this
+ * answer and of no other.
+ */
+export interface CreatedShareToken extends ShareToken {
+  /** The plaintext token, in the link. */
+  token: string;
+  /** The path of the share link. */
+  url: string;
+}
+
+/** Create a share link for a project. */
+export function createShareToken(
+  projectId: string,
+  options: { permission: SharePermission; label?: string; expiresAt?: string } = {
+    permission: 'ro',
+  },
+): Promise<CreatedShareToken> {
+  const body: Record<string, unknown> = { permission: options.permission };
+  if (options.label) {
+    body.label = options.label;
+  }
+  if (options.expiresAt) {
+    body.expiresAt = options.expiresAt;
+  }
+  return apiRequest<CreatedShareToken>(`/projects/${projectId}/share`, {
+    method: 'POST',
+    body,
+  });
+}
+
+/** List a project's share links. */
+export function listShareTokens(projectId: string): Promise<{ tokens: ShareToken[] }> {
+  return apiRequest<{ tokens: ShareToken[] }>(`/projects/${projectId}/share`);
+}
+
+/** Revoke a share link. */
+export function revokeShareToken(projectId: string, tokenId: string): Promise<void> {
+  return apiRequest<void>(`/projects/${projectId}/share/${encodeURIComponent(tokenId)}`, {
+    method: 'DELETE',
+  });
+}
+
+/**
+ * The header the provider's key travels in.
+ *
+ * The `Authorization` header carries the workspace's own key, which the
+ * server's authentication reads, so the provider's key gets a header of its
+ * own.
+ */
+export const PROVIDER_KEY_HEADER = 'x-provider-key';
+
+/**
+ * Ask the assistant a question.
+ *
+ * The reader's own provider key travels in its own header, so the server
+ * passes it on to the provider without ever keeping it.
+ */
+export async function askAi(
+  provider: AiProvider,
+  providerKey: string,
+  body: { prompt: string; source?: string; errors?: string[] },
+): Promise<string> {
+  const answer = await apiRequest<{ text: string }>('/ai/complete', {
+    method: 'POST',
+    headers: { [PROVIDER_KEY_HEADER]: providerKey },
+    body: { provider, ...body },
+  });
+
+  return answer.text;
 }

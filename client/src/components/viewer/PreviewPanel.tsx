@@ -27,6 +27,8 @@ export interface PreviewPanelProps {
   cursorLine: number | undefined;
   /** Called when the reader clicks a spot on the page. */
   onJumpToSource: (file: string, line: number) => void;
+  /** Called with the errors of the last build. */
+  onErrors?: (errors: string[]) => void;
 }
 
 /** The gap between two pages, in CSS pixels. */
@@ -47,6 +49,7 @@ export function PreviewPanel({
   mode,
   cursorLine,
   onJumpToSource,
+  onErrors,
 }: PreviewPanelProps): React.ReactElement {
   const [pdf, setPdf] = useState<ArrayBuffer | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
@@ -91,11 +94,13 @@ export function PreviewPanel({
         if (!outcome.success || !outcome.pdf) {
           if (mounted.current) {
             setError(outcome.errors.join('\n') || 'The compilation failed.');
+            onErrors?.(outcome.errors);
           }
           return;
         }
         if (mounted.current) {
           setPdf(outcome.pdf);
+          onErrors?.(outcome.errors);
         }
         return;
       }
@@ -103,6 +108,7 @@ export function PreviewPanel({
       const bytes = await compileProject(projectId, mainPath);
       if (mounted.current) {
         setPdf(bytes);
+        onErrors?.([]);
       }
     } catch (cause) {
       if (mounted.current) {
@@ -113,7 +119,7 @@ export function PreviewPanel({
         setBuilding(false);
       }
     }
-  }, [mode, projectId, source, mainPath, files]);
+  }, [mode, projectId, source, mainPath, files, onErrors]);
 
   // The preview is rebuilt whenever the document changes. The delay keeps a
   // burst of keystrokes from starting a build for every one of them.

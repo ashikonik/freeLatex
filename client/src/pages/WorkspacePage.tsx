@@ -4,9 +4,13 @@ import { WebsocketProvider } from 'y-websocket';
 import { Awareness } from 'y-protocols/awareness';
 
 import { CodeMirrorEditor, encodeRoomName } from '../components/editor/CodeMirrorEditor.js';
+import { AIAssistant } from '../components/ai/AIAssistant.js';
+import { ErrorFixModal } from '../components/ai/ErrorFixModal.js';
+import { HistoryModal } from '../components/history/HistoryModal.js';
 import { FileTree } from '../components/layout/FileTree.js';
 import { Header, type BuildMode } from '../components/layout/Header.js';
 import { SplitPane } from '../components/layout/SplitPane.js';
+import { ShareModal } from '../components/share/ShareModal.js';
 import { PreviewPanel } from '../components/viewer/PreviewPanel.js';
 import { listFiles, readFile, type Project } from '../lib/api.js';
 import { useAuth } from '../context/AuthContext.js';
@@ -45,6 +49,9 @@ export function WorkspacePage({ project, onBack }: WorkspacePageProps): React.Re
   const [files, setFiles] = useState<{ path: string; content: string }[]>([]);
   const [shareOpen, setShareOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [fixOpen, setFixOpen] = useState(false);
+  const [errors, setErrors] = useState<string[]>([]);
 
   // The document and the provider are torn down when the file changes, so
   // the previous file's socket does not linger.
@@ -169,6 +176,46 @@ export function WorkspacePage({ project, onBack }: WorkspacePageProps): React.Re
     setActivePath(path);
   }, []);
 
+  /**
+   * The project was restored to an older revision.
+   *
+   * The files on the server have changed, so the open file has to be read
+   * again. The collaboration room keeps the old content, so the document is
+   * rebuilt from the restored file.
+   */
+  const onRestored = useCallback(async (): Promise<void> => {
+    if (!activePath) {
+      return;
+    }
+    try {
+      const { content } = await readFile(project.id, activePath);
+      setSource(content);
+      doc?.getText('content').delete(0, doc.getText('content').length);
+      doc?.getText('content').insert(0, content);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'The project could not be reloaded.');
+    }
+  }, [project.id, activePath, doc]);
+
+  /**
+   * Put the assistant's answer into the document.
+   *
+   * The answer replaces the whole document, because the assistant is asked
+   * for a document rather than for a fragment.
+   */
+  const onApplyAi = useCallback(
+    (text: string): void => {
+      if (!doc) {
+        return;
+      }
+      const content = doc.getText('content');
+      content.delete(0, content.length);
+      content.insert(0, text);
+      setSource(text);
+    },
+    [doc],
+  );
+
   const onJumpToSource = useCallback((file: string, line: number): void => {
     // A jump into another file opens that file first, and the cursor is
     // placed once the editor of that file exists.
@@ -191,6 +238,7 @@ export function WorkspacePage({ project, onBack }: WorkspacePageProps): React.Re
           mode={mode}
           cursorLine={cursorLine}
           onJumpToSource={onJumpToSource}
+          onErrors={setErrors}
         />
       ) : (
         <div className="flex h-full items-center justify-center bg-slate-100 text-sm text-slate-500">
@@ -209,6 +257,9 @@ export function WorkspacePage({ project, onBack }: WorkspacePageProps): React.Re
         onModeChange={setMode}
         onShare={() => setShareOpen(true)}
         onHistory={() => setHistoryOpen(true)}
+        onAssistant={() => setAssistantOpen((open) => !open)}
+        onFixErrors={() => setFixOpen(true)}
+        errorCount={errors.length}
         status={status}
         onBack={onBack}
       />
@@ -219,96 +270,61 @@ export function WorkspacePage({ project, onBack }: WorkspacePageProps): React.Re
         </p>
       ) : null}
 
-      <div className="min-h-0 flex-1">
-        <SplitPane
-          left={
-            <FileTree
-              projectId={project.id}
-              activePath={activePath}
-              onSelect={onSelect}
-            />
-          }
-          center={
-            doc && awareness ? (
-              <CodeMirrorEditor
-                doc={doc}
-                awareness={awareness}
-                onCursorLineChange={setCursorLine}
-                cursorTarget={cursorTarget}
+      <div className="flex min-h-0 flex-1">
+        <div className="min-w-0 flex-1">
+          <SplitPane
+            left={
+              <FileTree
+                projectId={project.id}
+                activePath={activePath}
+                onSelect={onSelect}
               />
-            ) : (
-              <div className="flex h-full items-center justify-center text-sm text-slate-500">
-                Connecting…
-              </div>
-            )
-          }
-          right={viewer}
-        />
+            }
+            center={
+              doc && awareness ? (
+                <CodeMirrorEditor
+                  doc={doc}
+                  awareness={awareness}
+                  onCursorLineChange={setCursorLine}
+                  cursorTarget={cursorTarget}
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                  Connecting…
+                </div>
+              )
+            }
+            right={viewer}
+          />
+        </div>
+
+        {assistantOpen ? (
+          <div className="w-80 shrink-0 border-l border-slate-200">
+            <AIAssistant source={source} onApply={onApplyAi} />
+          </div>
+        ) : null}
       </div>
 
       {shareOpen ? (
-        <Modal title="Share" onClose={() => setShareOpen(false)}>
-          <p className="text-sm text-slate-600">
-            The share link for this project is created from the server. It arrives with the
-            sharing routes.
-          </p>
-        </Modal>
+        <ShareModal projectId={project.id} onClose={() => setShareOpen(false)} />
       ) : null}
 
       {historyOpen ? (
-        <Modal title="Document history" onClose={() => setHistoryOpen(false)}>
-          <p className="text-sm text-slate-600">
-            The list of snapshots for this project arrives with the history routes.
-          </p>
-        </Modal>
+        <HistoryModal
+          projectId={project.id}
+          onClose={() => setHistoryOpen(false)}
+          onRestored={onRestored}
+        />
       ) : null}
-    </div>
-  );
-}
 
-/** The properties of a modal. */
-export interface ModalProps {
-  /** The title of the modal. */
-  title: string;
-  /** Called when the modal is dismissed. */
-  onClose: () => void;
-  /** The modal's body. */
-  children: React.ReactNode;
-}
-
-/**
- * A modal dialog.
- *
- * The dialog is a plain overlay: it closes on the button and on a click on
- * the backdrop, which is what a reader expects of a lightbox.
- */
-export function Modal({ title, onClose, children }: ModalProps): React.ReactElement {
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
-      onClick={onClose}
-    >
-      <div
-        role="dialog"
-        aria-label={title}
-        className="w-full max-w-lg rounded-lg bg-white p-4 shadow-xl"
-        onClick={(event) => {
-          event.stopPropagation();
-        }}
-      >
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="font-medium text-slate-900">{title}</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded border border-slate-300 px-2 py-0.5 text-sm text-slate-600 hover:bg-slate-50"
-          >
-            ×
-          </button>
-        </div>
-        {children}
-      </div>
+      {fixOpen ? (
+        <ErrorFixModal
+          errors={errors}
+          source={source}
+          onApply={onApplyAi}
+          onClose={() => setFixOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }

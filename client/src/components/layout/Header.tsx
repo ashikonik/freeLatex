@@ -23,6 +23,12 @@ export interface HeaderProps {
   onShare: () => void;
   /** Called when the user asks for the document's history. */
   onHistory: () => void;
+  /** Called when the user asks the assistant for help. */
+  onAssistant?: () => void;
+  /** Called when the user asks the assistant to fix the compile errors. */
+  onFixErrors?: () => void;
+  /** How many compile errors the last build reported. */
+  errorCount?: number;
   /** The connection state of the collaboration session. */
   status: 'connecting' | 'connected' | 'offline';
   /** Called when the user leaves the workspace. */
@@ -54,6 +60,9 @@ export function Header({
   onModeChange,
   onShare,
   onHistory,
+  onAssistant,
+  onFixErrors,
+  errorCount = 0,
   status,
   onBack,
 }: HeaderProps): React.ReactElement {
@@ -117,6 +126,28 @@ export function Header({
       >
         History
       </button>
+
+      {onAssistant ? (
+        <button
+          type="button"
+          onClick={onAssistant}
+          data-testid="assistant-button"
+          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+        >
+          Assistant
+        </button>
+      ) : null}
+
+      {onFixErrors && errorCount > 0 ? (
+        <button
+          type="button"
+          onClick={onFixErrors}
+          data-testid="fix-errors-button"
+          className="rounded-md bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700"
+        >
+          Fix {errorCount} error{errorCount === 1 ? '' : 's'}
+        </button>
+      ) : null}
 
       <span className={`rounded-full px-2 py-0.5 text-xs ${stateClass}`} data-testid="connection-status">
         {stateLabel}
