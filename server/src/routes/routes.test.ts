@@ -20,6 +20,7 @@ function envFor(authMode: 'single' | 'multi'): Env {
     dataDir: '/tmp/freelatex-test',
     compileTimeoutMs: 30_000,
     nodeEnv: 'test',
+    corsOrigin: '',
     staticDir: '',
   };
 }

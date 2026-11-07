@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { cpus, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
 import { assertRealPathWithin, resolveWithin } from './paths.js';
@@ -260,6 +260,65 @@ interface ProcessResult {
 }
 
 /**
+ * How many compilations may run at the same time.
+ *
+ * Every compilation is a whole TeX engine, and each one wants a core of its
+ * own. Without a limit, a client that asks for a hundred builds at once
+ * takes every core and every megabyte of the server, and the other tenants
+ * wait. The queue keeps the machine usable: the builds wait their turn
+ * rather than all starting at once.
+ */
+const MAX_CONCURRENT_COMPILATIONS = Math.max(1, Math.min(4, cpus().length));
+
+/**
+ * How many compilations may run at the same time.
+ *
+ * Exported so that the limit can be tested without guessing the machine's
+ * core count.
+ */
+export const compilationLimit = MAX_CONCURRENT_COMPILATIONS;
+
+/**
+ * The compilations that are running right now.
+ */
+let runningCompilations = 0;
+
+/**
+ * The callers waiting for a free slot.
+ */
+const compilationQueue: (() => void)[] = [];
+
+/**
+ * Take a slot for a compilation, waiting for one if they are all taken.
+ *
+ * @returns A function that gives the slot back.
+ */
+async function acquireCompilationSlot(): Promise<() => void> {
+  if (runningCompilations < MAX_CONCURRENT_COMPILATIONS) {
+    runningCompilations += 1;
+    return releaseCompilationSlot;
+  }
+
+  await new Promise<void>((resolve) => {
+    compilationQueue.push(resolve);
+  });
+
+  runningCompilations += 1;
+  return releaseCompilationSlot;
+}
+
+/**
+ * Give a slot back and let the next waiting compilation take it.
+ */
+function releaseCompilationSlot(): void {
+  runningCompilations -= 1;
+  const next = compilationQueue.shift();
+  if (next) {
+    next();
+  }
+}
+
+/**
  * Run tectonic and collect its output.
  *
  * The process is killed if it outlives the timeout, and the promise resolves
@@ -268,7 +327,26 @@ interface ProcessResult {
  * The output is capped: a document can make TeX print an unbounded amount,
  * and the output is held in memory until the build finishes.
  */
-function runTectonic(
+async function runTectonic(
+  binary: string,
+  args: string[],
+  cwd: string,
+  timeoutMs: number,
+): Promise<ProcessResult> {
+  // The slot is taken before the process starts and given back when it ends,
+  // however it ends.
+  const release = await acquireCompilationSlot();
+  try {
+    return await startProcess(binary, args, cwd, timeoutMs);
+  } finally {
+    release();
+  }
+}
+
+/**
+ * Start the compiler process and settle with its result.
+ */
+function startProcess(
   binary: string,
   args: string[],
   cwd: string,

@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { and, eq } from 'drizzle-orm';
 
 import type { AuthContext } from '../auth/service.js';
@@ -16,6 +16,38 @@ interface ListKeysReply {
 }
 
 /**
+ * How many failed logins one address may make in a window.
+ *
+ * The login endpoint is the only route that is open to everybody, so it is
+ * the one an attacker will use to try key after key. The keys are long random
+ * strings and cannot be guessed, but an unthrottled endpoint is still an
+ * oracle: it answers faster than the keys can be tried and it shows whether
+ * a guess was close. A few failures in a window are a fat finger; a flood of
+ * them is an attack.
+ */
+const MAX_FAILED_LOGINS = 10;
+
+/**
+ * How long the failed attempts are remembered.
+ */
+const LOGIN_WINDOW_MS = 60_000;
+
+/**
+ * The address a request came from.
+ *
+ * The forwarded header is only trusted when the deployment sits behind a
+ * proxy that sets it; otherwise the address is the socket's.
+ */
+function clientAddress(request: FastifyRequest): string {
+  const forwarded = request.headers['x-forwarded-for'];
+  const first = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+  if (typeof first === 'string' && first.length > 0) {
+    return first.split(',')[0]?.trim() || request.ip;
+  }
+  return request.ip;
+}
+
+/**
  * The login route, registered outside the authenticated scope.
  *
  * It is the endpoint that *establishes* credentials, so it takes the API key
@@ -27,14 +59,65 @@ export async function loginRoutes(
   options: { context: AuthContext },
 ): Promise<void> {
   const { context } = options;
+
+  /**
+   * The failed logins of each address, with the time of the last one.
+   *
+   * The record belongs to the application rather than to the module, so a
+   * restarted server starts with a clean sheet and two applications in one
+   * process do not share their history.
+   */
+  const failedLogins = new Map<string, { count: number; lastAt: number }>();
+
+  /**
+   * Whether the address has made too many failed logins recently.
+   */
+  const isThrottled = (address: string): boolean => {
+    const entry = failedLogins.get(address);
+    if (!entry) {
+      return false;
+    }
+    if (Date.now() - entry.lastAt > LOGIN_WINDOW_MS) {
+      failedLogins.delete(address);
+      return false;
+    }
+    return entry.count >= MAX_FAILED_LOGINS;
+  };
+
+  /**
+   * Record a failed login for the address.
+   */
+  const recordFailure = (address: string): void => {
+    const entry = failedLogins.get(address);
+    if (!entry || Date.now() - entry.lastAt > LOGIN_WINDOW_MS) {
+      failedLogins.set(address, { count: 1, lastAt: Date.now() });
+      return;
+    }
+    entry.count += 1;
+    entry.lastAt = Date.now();
+  };
+
   app.post('/api/auth/login', async (request, reply) => {
+    const address = clientAddress(request);
+    if (isThrottled(address)) {
+      return reply
+        .status(429)
+        .header('Retry-After', String(Math.ceil(LOGIN_WINDOW_MS / 1000)))
+        .send({ error: 'Too many failed sign-in attempts. Try again in a minute.' });
+    }
+
     const body = request.body as { apiKey?: string } | undefined;
     const apiKey = body?.apiKey?.trim() || parseBearer(request.headers.authorization);
 
     const result = authenticateApiKey(context, apiKey);
     if (!result.ok) {
+      recordFailure(address);
       return reply.status(result.statusCode).send({ error: result.message });
     }
+
+    // The address has just proved it knows the key, so its failures are
+    // forgotten.
+    failedLogins.delete(address);
 
     return reply.send({
       identity: {

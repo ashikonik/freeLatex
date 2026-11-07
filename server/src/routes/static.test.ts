@@ -43,6 +43,7 @@ function envFor(): Env {
     compileTimeoutMs: 30_000,
     nodeEnv: 'test',
     staticDir,
+    corsOrigin: '',
   };
 }
 

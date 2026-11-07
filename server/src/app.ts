@@ -23,6 +23,14 @@ export interface AppOptions {
   /** Inject an open database handle. Used by tests to supply an in-memory DB. */
   db?: DbHandle;
   logger?: boolean;
+  /**
+   * Where the log is written.
+   *
+   * The default is the standard output. A test passes a stream of its own so
+   * that it can read back what was logged and check that a credential never
+   * reached it.
+   */
+  logStream?: { write(chunk: string): boolean };
 }
 
 export interface BuiltApp {
@@ -42,13 +50,45 @@ export async function buildApp(options: AppOptions = {}): Promise<BuiltApp> {
   const db = options.db ?? openDatabase(env.dataDir);
 
   const app = Fastify({
-    logger: options.logger ?? false,
+    // A credential must never reach the log. The browser's WebSocket API
+    // cannot set a header, so a share token travels in the query string of
+    // the upgrade request — and the request's URL is part of every log line.
+    // The serializer keeps the path and drops the query string, so the token
+    // stays out of the logs while the request itself is still traceable.
+    logger: options.logger
+      ? {
+          ...(options.logStream ? { stream: options.logStream } : {}),
+          serializers: {
+            req(request: { method?: string; url?: string }) {
+              return {
+                method: request.method,
+                url: request.url?.split('?')[0],
+              };
+            },
+          },
+        }
+      : false,
   });
 
-  await app.register(cors, {
-    origin: true,
-    credentials: true,
-  });
+  // Cross-origin access is off unless a deployment names the one origin that
+  // may use it. Reflecting whatever origin asks — with credentials — would
+  // let any site on the internet read the API's answers on the user's
+  // behalf, so the default is to allow none.
+  //
+  // The origin is a function rather than a string so that a request from
+  // anywhere else gets no header at all, rather than one naming an origin
+  // the browser will refuse.
+  await app.register(cors, env.corsOrigin
+    ? {
+        origin: (
+          origin: string | undefined,
+          callback: (error: Error | null, allow: string | boolean | RegExp) => void,
+        ) => {
+          callback(null, origin === env.corsOrigin);
+        },
+        credentials: true,
+      }
+    : { origin: false });
   await app.register(websocket, {
     options: {
       maxPayload: 5 * 1024 * 1024,

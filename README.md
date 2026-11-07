@@ -33,7 +33,6 @@ freeLatex/
 ├── client/                     # Vite + React + CodeMirror 6 + PDF.js
 ├── server/                     # Fastify + TypeScript + Yjs WebSocket + Tectonic
 ├── docker/                     # Multi-stage Dockerfile & docker-compose
-├── data/                       # SQLite DB (freelatex.db) and project files
 ├── ARCHITECTURE.md             # System design and protocol specification
 ├── IMPLEMENTATION_PLAN.md      # Step-by-step implementation roadmap
 └── README.md                   # Project overview & quickstart
@@ -44,20 +43,32 @@ freeLatex/
 ## 🚀 Quickstart
 
 ### 1. Single-User Mode (Default)
-Run a private instance on your machine or VPS:
+Run a private instance on your machine or VPS. The server and the client are
+two packages, so each is started from its own directory:
 ```bash
+cd server
 export ADMIN_API_KEY="your-secret-admin-key"
 export AUTH_MODE="single"
-npm run dev
+npm install && npm run dev
+```
+
+In a second terminal:
+```bash
+cd client
+npm install && npm run dev
 ```
 
 ### 2. Multi-User Mode
 Run a shared server where multiple users have distinct API keys:
 ```bash
+cd server
 export ADMIN_API_KEY="your-secret-admin-key"
 export AUTH_MODE="multi"
-npm run dev
+npm install && npm run dev
 ```
+
+The client is started the same way as above. The admin provisions a key for
+each user with `POST /api/auth/keys`.
 
 ### 3. Docker Deployment
 The image holds the server, the client's built files and the Tectonic
@@ -80,14 +91,14 @@ To build a smaller image without the in-browser preview:
 ```bash
 docker build -f docker/Dockerfile --build-arg WITH_WASM=false -t freelatex .
 ```
-That image skips the BusyTeX WebAssembly assets (520 MB), weighs 566 MB
-instead of 1.1 GB, and offers the **🖥️ Server Tectonic Build** mode only.
+That image skips the BusyTeX WebAssembly assets (727 MB), weighs 566 MB
+instead of 1.82 GB, and offers the **🖥️ Server Tectonic Build** mode only.
 
 ### 4. Frontend
 ```bash
 cd client
 npm install
-npm run download-assets   # fetches the BusyTeX WebAssembly engine (~520 MB, once)
+npm run download-assets   # fetches the BusyTeX WebAssembly engine (~727 MB, once)
 npm run dev               # http://127.0.0.1:5173
 ```
 
@@ -100,6 +111,41 @@ server.
 
 The Docker build fetches these assets itself, so a container ships with the
 instant preview ready to use.
+
+---
+
+## ⚙️ Configuration
+
+The server reads its configuration from the environment. Copy
+`server/.env.example` to `server/.env` to set them for a development run; in
+a container, pass them with `-e`.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `ADMIN_API_KEY` | — | **Required.** The master credential. In `single` mode it is the only key; in `multi` mode it lets the admin provision user keys. |
+| `AUTH_MODE` | `single` | `single` for a private instance, `multi` for one instance with isolated per-user workspaces. |
+| `PORT` | `3030` | The port the HTTP and WebSocket listener binds. |
+| `HOST` | `0.0.0.0` | The address the listener binds. |
+| `DATA_DIR` | `data` | Where the SQLite database and the project files live. |
+| `COMPILE_TIMEOUT_MS` | `30000` | How long a LaTeX compilation may run before it is killed. |
+| `STATIC_DIR` | — | The client's built files. Set it to serve the client from the server, so the whole application is one origin. |
+| `CORS_ORIGIN` | — | The one origin allowed to call the API from a browser. Leave it unset unless the client is served from somewhere else. |
+| `NODE_ENV` | `development` | The usual environment name. |
+
+**Cross-origin access is off by default.** A deployment that serves the client
+itself needs none: the browser talks to one origin. Set `CORS_ORIGIN` only
+when the client is served from a different origin — for example the Vite dev
+server — and name the single origin that is allowed.
+
+### 🔑 What the credentials can do
+
+- **`ADMIN_API_KEY`** reaches everything, including the admin routes that
+  provision and revoke user keys.
+- **A user key** (`sk_user_...`) reaches only its own projects.
+- **A share token** (`ro_...` or `rw_...`) reaches exactly one project.
+  A read-only token may read the files but may not change anything, may not
+  compile, and may not spend the owner's AI key. A read-only token is
+  refused at the collaboration socket as well.
 
 ---
 

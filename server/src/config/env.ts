@@ -22,6 +22,16 @@ export interface Env {
    * server answers the API alone.
    */
   readonly staticDir: string;
+  /**
+   * The origin allowed to call the API from a browser, if any.
+   *
+   * A deployment that serves the client itself needs no cross-origin access
+   * at all: the browser talks to one origin. This is empty by default, so a
+   * site cannot read the API's answers on the user's behalf. It is set only
+   * when the client is served from somewhere else — a separate frontend
+   * deployment, or the Vite dev server.
+   */
+  readonly corsOrigin: string;
 }
 
 export class EnvError extends Error {
@@ -81,6 +91,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     ),
     nodeEnv: source.NODE_ENV?.trim() || 'development',
     staticDir: source.STATIC_DIR?.trim() ? resolve(source.STATIC_DIR.trim()) : '',
+    corsOrigin: source.CORS_ORIGIN?.trim() || '',
   };
 }
 

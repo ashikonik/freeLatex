@@ -9,16 +9,16 @@
 Deliver an end-to-end, production-ready portable LaTeX platform with:
 1. **100% Free-Tier Guarantee**:
    - Zero paid subscriptions, zero paid API requirements.
-   - Local Tectonic compiler (free, auto-downloads free CTAN packages) + SwiftLaTeX WebAssembly (client-side in-browser, 0 cost).
-   - AI features use **Google Gemini 1.5/2.0 Flash / Pro free tier quota** (via Google AI Studio free API key) or local Ollama, strictly client-side BYOK.
+   - Local Tectonic compiler (free, auto-downloads free CTAN packages) + BusyTeX WebAssembly (client-side in-browser, 0 cost). *(The plan originally named SwiftLaTeX; the implementation uses `texlyre-busytex` — see the Step 9 deviation.)*
+   - AI features use **Google Gemini Flash free tier quota** (via Google AI Studio free API key), OpenAI or Anthropic, strictly client-side BYOK. *(The plan originally named local Ollama; it is not implemented — the three supported providers are Gemini, OpenAI and Anthropic.)*
    - Database: Local SQLite file (`freelatex.db`). Zero external cloud dependencies.
 2. **Dual-Mode Backend Personalization**:
    - **Single-Host Mode (`AUTH_MODE=single`)**: Powered by a single `ADMIN_API_KEY`. Instant zero-config private instance for a single user/researcher.
    - **Multi-Tenant Mode (`AUTH_MODE=multi`)**: Admin can issue individual **User API Keys** (`sk_user_...`). Each key owns an isolated workspace (`owner_id`), allowing multiple distinct users to use the same backend independently.
 3. **Overleaf-Style In-Product Version Control & Diff Viewer**:
-   - Snapshot engine: Automatic timed snapshots + manual named revisions ("Submission Draft", "Before Revision").
+   - Snapshot engine: manual named revisions ("Submission Draft", "Before Revision"). *(The plan originally named automatic timed snapshots; they are not implemented — a snapshot is made when the user asks for one.)*
    - Side-by-side and unified diff viewer between any two revisions.
-   - One-click rollback: Restores project files and broadcasts the change across active Yjs multiplayer sessions.
+   - One-click rollback: Restores project files on disk. *(The plan originally said the change is broadcast across active Yjs sessions; it is not — an open editor picks the restored file up on its next sync.)*
 4. **Frictionless Link Sharing**:
    - Owners generate Read/Write or Read-Only tokens (`?token=rw_...` or `?token=ro_...`) with optional expiration. Collaborators join live rooms immediately without accounts or API keys.
 5. **Multi-Headed Development Verification & Rollback Protocol**:
@@ -26,7 +26,7 @@ Deliver an end-to-end, production-ready portable LaTeX platform with:
      - **Head 1 (Automated Test / Contract Verification)**: Vitest unit & integration test suite.
      - **Head 2 (Static Integrity & Type Safety)**: TypeScript strict check (`tsc --noEmit`), lint checks, dependency validation.
      - **Head 3 (Runtime Functional Smoke Test)**: Server execution, endpoint probe via curl, WebSocket handshake, disk I/O verification.
-   - Atomic Git checkpoints (`git tag checkpoint-step-XX`) and an automated rollback script (`scripts/dev-rollback.sh`) with detailed step review diff logs (`.dev_logs/step_XX_diff.log`).
+   - Atomic Git checkpoints (`git tag checkpoint-step-XX`) and an automated rollback script (`scripts/dev-rollback.sh`) with detailed step review logs (`.dev_logs/step_N.log` and `.dev_logs/step_N.patch`).
 
 ---
 
@@ -86,7 +86,7 @@ sequenceDiagram
 > [!IMPORTANT]
 > **100% Free-Tier Architecture**:
 > - All software components are MIT/Open-Source.
-> - Compilation uses Tectonic (free binary with free on-demand CTAN caching) and SwiftLaTeX WebAssembly (client-side, zero hosting cost).
+> - Compilation uses Tectonic (free binary with free on-demand CTAN caching) and BusyTeX WebAssembly (client-side, zero hosting cost).
 > - AI keys are user-supplied (BYOK) with support for **Google Gemini's generous Free Tier** (15 RPM / 1 million TPM free via Google AI Studio). No paid backend AI gateway is required.
 
 > [!IMPORTANT]
@@ -115,7 +115,7 @@ The implementation is broken down into **10 granular, sequential micro-steps**. 
 ### Step 1: Server Package Bootstrap & Environment Layer
 - **1.1**: Initialize `server/package.json` with exact verified dependencies (`fastify`, `@fastify/websocket`, `@fastify/cors`, `@fastify/static`, `@fastify/multipart`, `better-sqlite3`, `drizzle-orm`, `nanoid`, `dotenv`, etc.).
 - **1.2**: Configure `server/tsconfig.json` with strict type checking.
-- **1.3**: Implement `server/src/config/env.ts` (Validates `ADMIN_API_KEY`, `AUTH_MODE`, `PORT=3030`, `DATA_DIR`, `COMPILE_TIMEOUT`).
+- **1.3**: Implement `server/src/config/env.ts` (Validates `ADMIN_API_KEY`, `AUTH_MODE`, `PORT=3030`, `HOST`, `DATA_DIR`, `COMPILE_TIMEOUT_MS`, `NODE_ENV`, `STATIC_DIR`, `CORS_ORIGIN`).
 - **1.4**: Create `server/.env.example`.
 - **Verification**:
   - Head 1: Unit test for env parsing and validation logic.
@@ -169,7 +169,7 @@ The implementation is broken down into **10 granular, sequential micro-steps**. 
   - `listProjectFiles(id)`: Recursively builds tree of files and directories.
   - `readProjectFile(id, path)`, `writeProjectFile(id, path, content)`, `deleteProjectFile(id, path)`.
   - `exportZip(id)`: Uses `archiver` to stream a clean Overleaf-compatible `.zip`.
-  - `importZip(ownerId, title, zipBuffer)`: Uses `extract-zip` to unpack uploaded archives.
+  - `importZip(ownerId, title, zipBuffer)`: Uses `yauzl` to unpack uploaded archives. *(The plan originally named `extract-zip`; `yauzl` is the library that is installed.)*
 - **4.2**: Implement `server/src/routes/projects.ts` (REST endpoints for project lifecycle & file tree).
 - **Verification**:
   - Head 1: Unit tests for project creation, file writing, zip export, and re-import roundtrip.
@@ -221,7 +221,11 @@ The implementation is broken down into **10 granular, sequential micro-steps**. 
 - **7.1**: Implement `server/src/services/yjs.ts`:
   - Registers `/ws/:room` with `@fastify/websocket`.
   - Authenticates WebSocket upgrade requests (validates Bearer key or share token).
-  - Connects socket to `setupWSConnection` from `y-websocket`.
+  - Connects socket to a room that speaks the `y-protocols` sync and awareness
+    messages directly. *(The plan originally named `setupWSConnection` from
+    `y-websocket`; the server implements the protocol itself, because the
+    authentication, the per-room authorisation and the disk persistence are
+    all part of the room's own behaviour.)*
   - Implements disk persistence: debounced flush of `Y.Text` to the corresponding `.tex` file on disk.
 - **7.2**: Connect server entry point (`server/src/index.ts`) registering all routes, plugins, and WebSocket gateway on port 3030.
 - **Verification**:
@@ -250,14 +254,14 @@ The implementation is broken down into **10 granular, sequential micro-steps**. 
 
 ---
 
-### Step 9: PDF Viewer, SyncTeX & Client-Side SwiftLaTeX Wasm
+### Step 9: PDF Viewer, SyncTeX & Client-Side BusyTeX Wasm
 - **9.1**: Implement `client/src/components/viewer/PDFViewer.tsx`:
   - PDF.js canvas rendering via `react-pdf` with continuous scroll, zoom controls, and page indicator.
 - **9.2**: Implement `client/src/components/viewer/SyncTeXOverlay.tsx`:
   - Forward sync: Clicking line in CodeMirror scrolls PDF and highlights paragraph.
   - Inverse sync: Double clicking PDF jumps CodeMirror cursor to corresponding line.
 - **9.3**: Implement `client/src/compiler/wasm-worker.ts`:
-  - Web Worker loading SwiftLaTeX WebAssembly engine for instant offline compilation.
+  - Web Worker loading the BusyTeX WebAssembly engine for instant offline compilation.
   - **Deviation**: SwiftLaTeX is not published on npm and its package mirror
     (`texlive2.swiftlatex.com`) is offline, so the engine is
     [`texlyre-busytex`](https://github.com/TeXlyre/texlyre-busytex) 1.4.1

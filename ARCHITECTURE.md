@@ -50,8 +50,8 @@ flowchart TB
         TectonicRunner --> ProjectFS
     end
 
-    subgraph External ["Free-Tier AI Provider (Optional BYOK)"]
-        LLM["Google Gemini Free Tier (via AI Studio) / Local Ollama"]
+    subgraph External ["AI Provider (Optional BYOK)"]
+        LLM["Google Gemini (AI Studio) / OpenAI / Anthropic"]
     end
 
     YDoc <-->|Multiplayer Binary WS| Gateway
@@ -117,8 +117,8 @@ sequenceDiagram
     User->>Server: POST /api/projects/:id/snapshots/:snapshotId/rollback
     Server->>DB: Retrieve snapshot content
     Server->>Disk: Overwrite project directory with snapshot files
-    Server->>Client: Broadcast Yjs transaction restoring editor text
-    Client-->>User: Editor displays restored version immediately
+    Server-->>User: Report the number of restored files
+    Note over Client,Disk: An open editor picks the restored file up on its next sync
 ```
 
 ---
@@ -136,6 +136,41 @@ freeLatex supports two operational topologies governed by `AUTH_MODE`:
 - Master admin provisions personal **User API Keys** (`sk_user_...`).
 - Queries are strictly scoped by tenant (`owner_id = user.id`).
 - Projects, files, and quotas are isolated between users.
+
+### What a credential can reach
+
+Every route that touches project data asks `canAccessProject` before it
+reads or writes anything, and the collaboration socket asks the same
+question with `write: true`, so a read-only link is refused there as well.
+
+| Credential | Reaches |
+|---|---|
+| `ADMIN_API_KEY` | Every project, plus the admin routes that provision and revoke user keys. |
+| `sk_user_...` | Only the projects whose `owner_id` is that user. |
+| `rw_...` share token | Exactly one project, and may write in it. It may not reach the admin routes, and it may not spend the owner's AI key. |
+| `ro_...` share token | Exactly one project, and may only read it. It may not compile, may not change anything, and is refused at the collaboration socket. |
+
+### The guards around the edges
+
+- **The log never holds a credential.** The browser's WebSocket API cannot
+  set a header, so a share token travels in the query string of the upgrade
+  request — and the request's URL is part of every log line. The logger's
+  request serializer keeps the path and drops the query string, so the token
+  stays out of the logs while the request is still traceable.
+- **Cross-origin access is off unless it is named.** `CORS_ORIGIN` names
+  the single origin that may call the API from a browser; unset, no origin
+  is allowed at all. Reflecting whatever origin asks would let any site on
+  the internet read the API's answers on the user's behalf.
+- **The sign-in endpoint is throttled.** Ten failures from one address in a
+  minute, and the eleventh attempt is refused. The keys are long random
+  strings and cannot be guessed, but an unthrottled endpoint is still an
+  oracle.
+- **The compiler is bounded.** A compilation runs for at most
+  `COMPILE_TIMEOUT_MS` and prints at most 4 MiB, and no more than a few of
+  them run at the same time — a client that asks for a hundred builds at
+  once waits its turn rather than taking every core of the server. The
+  compiler is spawned with an argument array and no shell, so a document
+  cannot run a command.
 
 ---
 
