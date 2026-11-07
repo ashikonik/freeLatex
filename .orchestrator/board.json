@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "project": "freeLatex",
-  "updated_at": "2026-11-07T09:53:39Z",
+  "updated_at": "2026-11-07T09:53:51Z",
   "tasks": [
     {
       "id": "T-001",
       "title": "Step 10: History UI, AI assistant & Docker delivery",
       "body": "Finish the last documented step: the history modal with a working side-by-side diff, the BYOK AI assistant and the one-click error fix, and a Docker image that serves the API, the client and a real LaTeX-to-PDF compile. Verify with the three-headed protocol (vitest, tsc --noEmit, runtime probe) and tag checkpoint-step-10-full-delivery.",
-      "state": "in_progress",
+      "state": "done",
       "labels": [
         "step-10",
         "delivery"
@@ -16,7 +16,7 @@
       "blocked_by": [],
       "branch": "step-10-delivery",
       "created_at": "2026-11-07T09:22:44Z",
-      "updated_at": "2026-11-07T09:53:39Z",
+      "updated_at": "2026-11-07T09:53:51Z",
       "history": [
         {
           "at": "2026-11-07T09:22:44Z",
@@ -31,6 +31,13 @@
           "to": "in_progress",
           "actor": "orchestrator",
           "note": "updated branch"
+        },
+        {
+          "at": "2026-11-07T09:53:51Z",
+          "from": "in_progress",
+          "to": "done",
+          "actor": "orchestrator",
+          "note": ""
         }
       ]
     }
