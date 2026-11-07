@@ -87,7 +87,11 @@ export async function buildApp(options: AppOptions = {}): Promise<BuiltApp> {
     await scoped.register(shareRoutes, { context });
     await scoped.register(projectRoutes, { context, storage });
     await scoped.register(snapshotRoutes, { context, snapshots });
-    await scoped.register(compileRoutes, { context, storage });
+    await scoped.register(compileRoutes, {
+      context,
+      storage,
+      compileTimeoutMs: env.compileTimeoutMs,
+    });
   });
 
   app.setErrorHandler((error: FastifyError, request, reply) => {

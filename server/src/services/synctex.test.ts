@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
@@ -41,6 +41,19 @@ Probe body
 `;
 
 /**
+ * A document that pulls in two files that share a base name.
+ *
+ * The compiler records both files under the key `same.tex`, so the engine has
+ * to tell them apart by the file number each box carries.
+ */
+const DOCUMENT_WITH_DUPLICATE_NAMES = `\\documentclass{article}
+\\begin{document}
+\\input{a/same.tex}
+\\input{b/same.tex}
+\\end{document}
+`;
+
+/**
  * The SyncTeX data of a real compilation.
  *
  * Building it once in `beforeAll` keeps the tests fast: the fixture is
@@ -50,6 +63,12 @@ let synctexData: Buffer | undefined;
 
 /** The SyncTeX data of the document with body text after a heading. */
 let bodySynctexData: Buffer | undefined;
+
+/** The SyncTeX data of the document with two files of the same name. */
+let duplicateSynctexData: Buffer | undefined;
+
+/** The directory the duplicate-name fixture was compiled in. */
+let duplicateProjectDir: string | undefined;
 
 beforeAll(async () => {
   if ((await resolveTectonicBinary()) === undefined) {
@@ -76,11 +95,34 @@ beforeAll(async () => {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+
+  // The duplicate-name fixture needs its own directory, because the engine
+  // has to know the project root to relate the compiler's absolute paths.
+  const dupDir = await mkdtemp(join(tmpdir(), 'freelatex-synctex-dup-'));
+  try {
+    await mkdir(join(dupDir, 'a'), { recursive: true });
+    await mkdir(join(dupDir, 'b'), { recursive: true });
+    await writeFile(join(dupDir, 'main.tex'), DOCUMENT_WITH_DUPLICATE_NAMES, 'utf8');
+    await writeFile(join(dupDir, 'a', 'same.tex'), 'Alpha from a.\n', 'utf8');
+    await writeFile(join(dupDir, 'b', 'same.tex'), 'Beta from b.\n', 'utf8');
+
+    const dupResult = await compileProject({
+      projectDir: dupDir,
+      mainFile: 'main.tex',
+      timeoutMs: 60_000,
+    });
+    duplicateSynctexData = dupResult.synctex;
+    duplicateProjectDir = dupDir;
+  } finally {
+    await rm(dupDir, { recursive: true, force: true });
+  }
 }, COMPILE_TEST_TIMEOUT);
 
 afterAll(() => {
   synctexData = undefined;
   bodySynctexData = undefined;
+  duplicateSynctexData = undefined;
+  duplicateProjectDir = undefined;
 });
 
 describe('SyncTexEngine', () => {
@@ -277,5 +319,56 @@ describe('SyncTexEngine', () => {
     const engine = new SyncTexEngine(synctexData);
 
     expect(engine.inverseSearch(100, 100, 999)).toBeUndefined();
+  });
+
+  it('tells two files that share a base name apart', () => {
+    if (!duplicateSynctexData || !duplicateProjectDir) {
+      return;
+    }
+    const engine = new SyncTexEngine(duplicateSynctexData, duplicateProjectDir);
+
+    // The compiler records both files under the key "same.tex", so the
+    // engine has to name them by their path relative to the project root.
+    expect(engine.fileNames).toContain('a/same.tex');
+    expect(engine.fileNames).toContain('b/same.tex');
+
+    const first = engine.forwardSearch('a/same.tex', 1);
+    const second = engine.forwardSearch('b/same.tex', 1);
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+
+    // The two files are typeset one after the other, so they cannot share a
+    // position.
+    expect(first?.position.x).not.toBe(second?.position.x);
+  });
+
+  it('finds a file by its project-relative path', () => {
+    if (!duplicateSynctexData || !duplicateProjectDir) {
+      return;
+    }
+    const engine = new SyncTexEngine(duplicateSynctexData, duplicateProjectDir);
+
+    // A client addresses a file the way the workspace shows it: relative to
+    // the project root.
+    expect(engine.forwardSearch('a/same.tex', 1)).toBeDefined();
+    expect(engine.forwardSearch('main.tex', 3)).toBeDefined();
+  });
+
+  it('rejects SyncTeX data that records no pages', () => {
+    // The parser accepts anything and returns an empty document, so a
+    // payload with no layout must be rejected rather than served.
+    const payload = [
+      'SyncTeX!{31}',
+      'Input:1:/tmp/main.tex',
+      'Output:pdf',
+      'Magnification:1000',
+      'Unit:1',
+      'X Offset:0',
+      'Y Offset:0',
+      'Content:',
+      '',
+    ].join('\n');
+
+    expect(() => new SyncTexEngine(gzipSync(Buffer.from(payload)))).toThrow(SyncTexError);
   });
 });

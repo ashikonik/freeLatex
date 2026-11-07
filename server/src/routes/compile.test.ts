@@ -137,13 +137,58 @@ describe('POST /api/projects/:id/compile', () => {
       headers: { authorization: `Bearer ${OWNER_KEY}` },
     });
 
+    // A successful build answers with the PDF itself.
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toBe('application/pdf');
+    expect(response.rawPayload.subarray(0, 5).toString('ascii')).toBe('%PDF-');
+  }, COMPILE_TEST_TIMEOUT);
+
+  it('reports the metadata of the last build', async () => {
+    if (!(await tectonicAvailable())) {
+      return;
+    }
+    await writeFile('main.tex', VALID_DOCUMENT);
+    await built.app.inject({
+      method: 'POST',
+      url: '/api/projects/prj_1/compile',
+      headers: { authorization: `Bearer ${OWNER_KEY}` },
+    });
+
+    const response = await built.app.inject({
+      method: 'GET',
+      url: '/api/projects/prj_1/compile',
+      headers: { authorization: `Bearer ${OWNER_KEY}` },
+    });
+
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.success).toBe(true);
     expect(body.pageCount).toBeGreaterThanOrEqual(1);
     expect(body.hasSyncTex).toBe(true);
     expect(body.errors).toEqual([]);
+    expect(typeof body.durationMs).toBe('number');
+    expect(typeof body.builtAt).toBe('string');
   }, COMPILE_TEST_TIMEOUT);
+
+  it('reports 404 for the build metadata before any build', async () => {
+    const response = await built.app.inject({
+      method: 'GET',
+      url: '/api/projects/prj_1/compile',
+      headers: { authorization: `Bearer ${OWNER_KEY}` },
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('does not let one user read another user\'s build metadata', async () => {
+    const response = await built.app.inject({
+      method: 'GET',
+      url: '/api/projects/prj_1/compile',
+      headers: { authorization: `Bearer ${OTHER_KEY}` },
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
 
   it('reports a structured error for an invalid project', async () => {
     if (!(await tectonicAvailable())) {

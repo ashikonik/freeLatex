@@ -8,12 +8,10 @@ import {
   CompilerNotFoundError,
   CompileTimeoutError,
   compileProject,
+  type CompileError,
 } from '../services/compiler.js';
-import { SyncTexEngine, SyncTexError } from '../services/synctex.js';
+import { SyncTexEngine } from '../services/synctex.js';
 import { ProjectStorage } from '../services/storage.js';
-
-/** The compile timeout, in milliseconds. */
-const COMPILE_TIMEOUT_MS = 30_000;
 
 /**
  * A compiled document, kept in memory for the lifetime of the process.
@@ -27,7 +25,7 @@ interface BuildArtifact {
   pdf: Buffer;
   synctex: Buffer | undefined;
   engine: SyncTexEngine | undefined;
-  errors: unknown[];
+  errors: CompileError[];
   durationMs: number;
   builtAt: number;
 }
@@ -49,16 +47,20 @@ const builds = new Map<string, BuildArtifact>();
  */
 export async function compileRoutes(
   app: FastifyInstance,
-  options: { context: AuthContext; storage: ProjectStorage },
+  options: { context: AuthContext; storage: ProjectStorage; compileTimeoutMs: number },
 ): Promise<void> {
-  const { context, storage } = options;
+  const { context, storage, compileTimeoutMs } = options;
 
   /**
    * Compile a project.
    *
-   * The response carries the diagnostics as JSON, because a failed build has
-   * no PDF to stream. The PDF itself is served separately by the preview
-   * endpoint so that a client can refetch it without recompiling.
+   * A successful build answers with the PDF itself, so that a client can
+   * render it without a second request. A failed build has no PDF, so the
+   * answer is the structured error log instead.
+   *
+   * The diagnostics of a successful build are not in the body — a body
+   * carries one representation — so they are available from the build
+   * metadata endpoint.
    */
   app.post('/api/projects/:id/compile', async (request, reply) => {
     const { id } = request.params as { id: string };
@@ -85,7 +87,7 @@ export async function compileRoutes(
       result = await compileProject({
         projectDir: storage.projectDir(id),
         mainFile,
-        timeoutMs: COMPILE_TIMEOUT_MS,
+        timeoutMs: compileTimeoutMs,
       });
     } catch (error) {
       // A missing compiler is a deployment problem, not a user problem: the
@@ -109,7 +111,7 @@ export async function compileRoutes(
         errors: result.errors,
         log: result.log,
         durationMs: result.durationMs,
-        failureReason: result.failureReason ?? 'compile-failed',
+        failureReason: result.failureReason ?? 'no-output',
       });
     }
 
@@ -118,7 +120,10 @@ export async function compileRoutes(
     let engine: SyncTexEngine | undefined;
     if (result.synctex) {
       try {
-        engine = new SyncTexEngine(result.synctex);
+        // The project root lets the engine report file names relative to
+        // it, which is the only way to tell two files that share a base
+        // name apart.
+        engine = new SyncTexEngine(result.synctex, storage.projectDir(id));
       } catch {
         engine = undefined;
       }
@@ -135,12 +140,48 @@ export async function compileRoutes(
 
     context.db.update(projects).set({ updatedAt: new Date() }).where(eq(projects.id, id)).run();
 
+    // The build's own PDF is the answer: a client can render it without a
+    // second request. The diagnostics of a successful build are not in the
+    // body — a body carries one representation — so they come from the
+    // build metadata endpoint instead.
+    reply.header('Content-Type', 'application/pdf');
+    reply.header('Content-Length', String(result.pdf.length));
+    // The PDF changes with every build, so it must never be cached by the
+    // browser or an intermediary.
+    reply.header('Cache-Control', 'no-store');
+    return reply.send(result.pdf);
+  });
+
+  /**
+   * Report the metadata of the most recent build.
+   *
+   * The compile route answers with the PDF, so the diagnostics of a
+   * successful build have to be asked for separately.
+   */
+  app.get('/api/projects/:id/compile', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const identity = request.identity;
+    if (!identity) {
+      return reply.status(401).send({ error: 'Not authenticated.' });
+    }
+
+    const decision = canAccessProject(context.db, identity, id);
+    if (!decision.allowed) {
+      return reply.status(decision.statusCode).send({ error: decision.message });
+    }
+
+    const build = builds.get(id);
+    if (!build) {
+      return reply.status(404).send({ error: 'The project has not been compiled yet.' });
+    }
+
     return reply.send({
       success: true,
-      errors: result.errors,
-      durationMs: result.durationMs,
-      pageCount: engine?.pageCount ?? 0,
-      hasSyncTex: engine !== undefined,
+      errors: build.errors,
+      durationMs: build.durationMs,
+      pageCount: build.engine?.pageCount ?? 0,
+      hasSyncTex: build.engine !== undefined,
+      builtAt: new Date(build.builtAt).toISOString(),
     });
   });
 
@@ -294,6 +335,3 @@ export function invalidateBuild(projectId: string): void {
 export function clearBuilds(): void {
   builds.clear();
 }
-
-/** Re-exported so a caller can catch the SyncTeX failure explicitly. */
-export { SyncTexError };

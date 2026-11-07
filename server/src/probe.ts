@@ -199,7 +199,29 @@ async function main(): Promise<void> {
         if (compiled.statusCode !== 200) {
           throw new Error(`probe: compilation returned ${compiled.statusCode}`);
         }
-        const compileBody = compiled.json();
+        // A successful build answers with the PDF itself.
+        if (compiled.headers['content-type'] !== 'application/pdf') {
+          throw new Error('probe: compilation did not answer with a PDF');
+        }
+        if (compiled.rawPayload.subarray(0, 8).toString('ascii') !== '%PDF-1.5') {
+          throw new Error(
+            `probe: compilation did not answer with a %PDF-1.5 document (got "${compiled.rawPayload
+              .subarray(0, 8)
+              .toString('ascii')}")`,
+          );
+        }
+
+        // The diagnostics of a successful build come from the metadata
+        // endpoint, because the compile route's body carries the PDF.
+        const metadata = await app.inject({
+          method: 'GET',
+          url: `/api/projects/${projectId}/compile`,
+          headers: auth,
+        });
+        if (metadata.statusCode !== 200) {
+          throw new Error(`probe: build metadata returned ${metadata.statusCode}`);
+        }
+        const compileBody = metadata.json();
         if (compileBody.success !== true) {
           throw new Error('probe: compilation reported a failure');
         }

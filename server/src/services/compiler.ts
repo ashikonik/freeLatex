@@ -4,6 +4,8 @@ import { constants } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
+import { assertRealPathWithin, resolveWithin } from './paths.js';
+
 /** Severity of a single LaTeX diagnostic. */
 export type CompileErrorSeverity = 'error' | 'warning';
 
@@ -53,6 +55,7 @@ export type CompileFailureReason =
   | 'compiler-not-found'
   | 'timeout'
   | 'main-file-missing'
+  | 'no-output'
   | 'spawn-failed';
 
 /**
@@ -91,6 +94,15 @@ export interface CompilerOptions {
   /** Override the tectonic executable (used by tests). */
   binaryPath?: string;
 }
+
+/**
+ * Upper bound on the compiler's output.
+ *
+ * A document can make TeX print an enormous amount — a runaway loop with a
+ * `\message` in a loop, for instance. The output is collected in memory, so
+ * it has to be capped or a single build could exhaust the server.
+ */
+const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 
 /**
  * The name of the tectonic executable.
@@ -172,11 +184,14 @@ export async function compileProject(options: CompilerOptions): Promise<CompileR
   }
 
   const mainFile = options.mainFile.trim() || 'main.tex';
-  if (mainFile.includes('..') || mainFile.startsWith('/')) {
-    // The main file is read from the project directory, so it must not be
-    // able to point outside it.
-    throw new Error('The main file must be a path within the project.');
-  }
+
+  // The main file is read from the project directory, so it must not be able
+  // to point outside it. The same two checks the storage service uses apply
+  // here: a lexical check for `..` and an absolute path, and a check of the
+  // real path so that a symlink planted in the project cannot lead the
+  // compiler out of it.
+  const mainFilePath = resolveWithin(options.projectDir, mainFile);
+  await assertRealPathWithin(options.projectDir, mainFilePath);
 
   // A scratch directory keeps the compiler's intermediates out of the project.
   const workDir = await mkdtemp(join(tmpdir(), 'freelatex-build-'));
@@ -200,6 +215,13 @@ export async function compileProject(options: CompilerOptions): Promise<CompileR
     const log = result.stdout + result.stderr;
     const errors = parseCompilerErrors(log);
 
+    // A build that overran its budget is raised rather than returned: the
+    // caller has to tell "took too long" from "did not compile", and the two
+    // need different answers.
+    if (result.timedOut) {
+      throw new CompileTimeoutError(options.timeoutMs);
+    }
+
     // A non-zero exit is only a failure when no PDF was produced: tectonic
     // can report a recoverable error and still emit a document.
     const outputBase = stripExtension(mainFile);
@@ -212,7 +234,7 @@ export async function compileProject(options: CompilerOptions): Promise<CompileR
         errors,
         log,
         durationMs: Date.now() - startedAt,
-        failureReason: result.timedOut ? 'timeout' : undefined,
+        failureReason: 'no-output',
       };
     }
 
@@ -242,6 +264,9 @@ interface ProcessResult {
  *
  * The process is killed if it outlives the timeout, and the promise resolves
  * either way — the caller inspects the output to decide what happened.
+ *
+ * The output is capped: a document can make TeX print an unbounded amount,
+ * and the output is held in memory until the build finishes.
  */
 function runTectonic(
   binary: string,
@@ -259,6 +284,8 @@ function runTectonic(
 
     let stdout = '';
     let stderr = '';
+    let collected = 0;
+    let truncated = false;
     let timedOut = false;
     let settled = false;
 
@@ -267,11 +294,37 @@ function runTectonic(
       child.kill('SIGKILL');
     }, timeoutMs);
 
+    /** Append to a buffer, up to the cap. */
+    const append = (target: 'stdout' | 'stderr', chunk: Buffer): void => {
+      if (collected >= MAX_OUTPUT_BYTES) {
+        truncated = true;
+        return;
+      }
+      const text = chunk.toString('utf8');
+      const room = MAX_OUTPUT_BYTES - collected;
+      if (text.length >= room) {
+        truncated = true;
+        collected = MAX_OUTPUT_BYTES;
+        if (target === 'stdout') {
+          stdout += text.slice(0, room);
+        } else {
+          stderr += text.slice(0, room);
+        }
+        return;
+      }
+      collected += text.length;
+      if (target === 'stdout') {
+        stdout += text;
+      } else {
+        stderr += text;
+      }
+    };
+
     child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf8');
+      append('stdout', chunk);
     });
     child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString('utf8');
+      append('stderr', chunk);
     });
 
     child.on('error', (error: NodeJS.ErrnoException) => {
@@ -293,7 +346,12 @@ function runTectonic(
       }
       settled = true;
       clearTimeout(timer);
-      resolve({ stdout, stderr, code, timedOut });
+      resolve({
+        stdout: truncated ? `${stdout}\n[output truncated]\n` : stdout,
+        stderr,
+        code,
+        timedOut,
+      });
     });
   });
 }

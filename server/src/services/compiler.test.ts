@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import {
   CompilerNotFoundError,
+  CompileTimeoutError,
   compileProject,
   parseCompilerErrors,
   resolveTectonicBinary,
@@ -210,7 +211,7 @@ describe('compileProject', () => {
         mainFile: '../escape.tex',
         timeoutMs: 10_000,
       }),
-    ).rejects.toThrow(/within the project/);
+    ).rejects.toThrow(/escapes/);
   });
 
   it('rejects an absolute main file', async () => {
@@ -220,7 +221,29 @@ describe('compileProject', () => {
         mainFile: '/etc/passwd',
         timeoutMs: 10_000,
       }),
-    ).rejects.toThrow(/within the project/);
+    ).rejects.toThrow(/must be relative/);
+  });
+
+  it('rejects a main file that is a symlink out of the project', async () => {
+    // The lexical check cannot see a symlink, so the real path has to be
+    // checked too. Without it, the compiler would read a file outside the
+    // project.
+    const outside = await mkdtemp(join(tmpdir(), 'freelatex-outside-'));
+    try {
+      await writeFile(join(outside, 'secret.tex'), '\\documentclass{article}\n', 'utf8');
+      const { symlink } = await import('node:fs/promises');
+      await symlink(join(outside, 'secret.tex'), join(workDir, 'link.tex'));
+
+      await expect(
+        compileProject({
+          projectDir: workDir,
+          mainFile: 'link.tex',
+          timeoutMs: 10_000,
+        }),
+      ).rejects.toThrow(/escapes/);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
   });
 
   it('raises a dedicated error when the binary does not exist', async () => {
@@ -233,6 +256,25 @@ describe('compileProject', () => {
       }),
     ).rejects.toThrow(CompilerNotFoundError);
   });
+
+  it('raises a timeout error when the compilation outlives its budget', async () => {
+    if (!(await tectonicAvailable())) {
+      return;
+    }
+    // A document that makes TeX loop forever.
+    await writeTex(
+      'main.tex',
+      '\\documentclass{article}\n\\begin{document}\n\\loop\\iftrue\\repeat\n\\end{document}\n',
+    );
+
+    await expect(
+      compileProject({
+        projectDir: workDir,
+        mainFile: 'main.tex',
+        timeoutMs: 2_000,
+      }),
+    ).rejects.toThrow(CompileTimeoutError);
+  }, COMPILE_TEST_TIMEOUT);
 
   it('reports a missing main file as a failed compile', async () => {
     if (!(await tectonicAvailable())) {

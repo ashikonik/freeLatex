@@ -1,5 +1,6 @@
 import { gunzipSync } from 'node:zlib';
 import { createRequire } from 'node:module';
+import { normalize } from 'node:path';
 
 /**
  * `synctex-js` is a CommonJS package with no type declarations, so it is
@@ -125,6 +126,9 @@ interface HitBox {
  * `blockNumberLine` map, which lists every source line the compiler saw
  * together with the boxes it produced for it. The document's page tree is
  * used as a fallback for the width of a box whose own width is unknown.
+ *
+ * The compiler records absolute paths, so the engine is told the project's
+ * root and reports file names relative to it.
  */
 export class SyncTexEngine {
   private readonly document: SynctexDocument;
@@ -133,20 +137,35 @@ export class SyncTexEngine {
   /** The first hittable box of each source line. */
   private readonly byLine = new Map<string, HitBox>();
 
-  constructor(compressed: Buffer) {
+  /**
+   * @param compressed The `.synctex.gz` payload.
+   * @param projectRoot The absolute path of the project directory, used to
+   * turn the compiler's absolute file paths into project-relative ones.
+   */
+  constructor(compressed: Buffer, projectRoot?: string) {
     const body = decompress(compressed);
     this.document = parse(body);
+    this.projectRoot = projectRoot ? normalize(projectRoot) : undefined;
     this.index();
   }
+
+  /** The absolute path of the project directory, when the engine knows it. */
+  private readonly projectRoot: string | undefined;
 
   /** The number of pages the document has. */
   get pageCount(): number {
     return this.document.numberPages;
   }
 
-  /** The file names the compiler recorded, relative to the project root. */
+  /**
+   * The file names the compiler recorded, relative to the project root.
+   *
+   * The compiler records a file's full path and a bare name. Two files in
+   * different directories can share a name, so the name alone is not enough
+   * to address a file; the path relative to the project root is.
+   */
   get fileNames(): string[] {
-    return Object.values(this.document.files).map((file) => file.name);
+    return Object.values(this.document.files).map((file) => this.relativePath(file));
   }
 
   /**
@@ -229,6 +248,11 @@ export class SyncTexEngine {
    * A box without a width therefore borrows the width of the box that shares
    * its vertical band — the same bottom and height — which is what turns a
    * marker into a rectangle that a click can hit.
+   *
+   * The map is keyed by a file's *bare name*, so two files that share a name
+   * in different directories appear under one key. Each box therefore names
+   * its own file through its file number, and the file number is what
+   * decides which file a box belongs to.
    */
   private index(): void {
     // Widths by vertical band, taken from every box the document records.
@@ -249,8 +273,7 @@ export class SyncTexEngine {
       }
     }
 
-    for (const [fileName, byLine] of Object.entries(this.document.blockNumberLine)) {
-      const file = normalizeFileName(fileName);
+    for (const byLine of Object.values(this.document.blockNumberLine)) {
       for (const [line, byPage] of Object.entries(byLine)) {
         const lineNumber = Number(line);
         if (!Number.isInteger(lineNumber) || lineNumber < 1) {
@@ -259,6 +282,11 @@ export class SyncTexEngine {
 
         for (const [page, boxes] of Object.entries(byPage)) {
           for (const box of boxes) {
+            const file = this.fileOf(box);
+            if (!file) {
+              continue;
+            }
+
             const width =
               box.width ?? widths.get(bandKey(box.bottom, box.height)) ?? 0;
 
@@ -290,6 +318,44 @@ export class SyncTexEngine {
         }
       }
     }
+  }
+
+  /**
+   * The project-relative path of the file a box belongs to.
+   *
+   * The box names its file by number, which is the only way to tell two
+   * files that share a base name apart.
+   */
+  private fileOf(box: SynctexBox): string | undefined {
+    const file = this.document.files[String(box.fileNumber)];
+    if (file) {
+      return this.relativePath(file);
+    }
+
+    // A box that names its file directly still identifies it.
+    if (box.file?.name) {
+      return this.relativePath(box.file);
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Turn a recorded file into a project-relative path.
+   *
+   * The compiler records an absolute path and a bare name. The path is
+   * preferred, because two files can share a name; the name is the fallback
+   * for a file whose path could not be related to the project root.
+   */
+  private relativePath(file: SynctexFile): string {
+    const path = normalizeFileName(file.path ?? '');
+    if (path && this.projectRoot) {
+      const relative = relativePathFrom(this.projectRoot, path);
+      if (relative && !relative.startsWith('..')) {
+        return relative;
+      }
+    }
+    return normalizeFileName(file.name ?? path);
   }
 }
 
@@ -378,9 +444,20 @@ function parse(body: string): SynctexDocument {
     throw new SyncTexError('The SyncTeX data is malformed.');
   }
 
-  // A real SyncTeX file always records its files. An empty result means the
-  // parser was handed something else entirely.
+  // A real SyncTeX file always records its files and the pages it laid out.
+  // An empty result means the parser was handed something else entirely:
+  // the parser is forgiving and returns an empty document rather than
+  // failing, so the result has to be checked.
   if (Object.keys(document.files ?? {}).length === 0) {
+    throw new SyncTexError('The SyncTeX data is malformed.');
+  }
+
+  if (!Number.isInteger(document.numberPages) || document.numberPages < 1) {
+    throw new SyncTexError('The SyncTeX data is malformed.');
+  }
+
+  // A document with pages but no boxes at all carries no usable positions.
+  if (Object.keys(document.blockNumberLine ?? {}).length === 0) {
     throw new SyncTexError('The SyncTeX data is malformed.');
   }
 
@@ -416,10 +493,28 @@ function containsPoint(box: HitBox, x: number, y: number): boolean {
 }
 
 /**
- * Normalise a recorded file name to a project-relative POSIX path.
+ * Normalise a recorded file name to a POSIX path.
  *
- * The compiler records absolute paths; the API speaks project-relative ones.
+ * The compiler records paths with the host's separators.
  */
 function normalizeFileName(name: string): string {
   return name.replace(/\\/g, '/');
+}
+
+/**
+ * The path of a file relative to a root directory.
+ *
+ * Returns an empty string when the file lies outside the root, so that the
+ * caller can tell "inside the project" from "somewhere else".
+ */
+function relativePathFrom(root: string, path: string): string {
+  const normalizedRoot = normalize(root);
+  const normalizedPath = normalize(path);
+  if (normalizedPath === normalizedRoot) {
+    return '';
+  }
+  if (!normalizedPath.startsWith(`${normalizedRoot}/`)) {
+    return '';
+  }
+  return normalizedPath.slice(normalizedRoot.length + 1);
 }

@@ -169,6 +169,10 @@ export async function projectRoutes(
     await storage.deleteProject(id);
     context.db.delete(projects).where(eq(projects.id, id)).run();
 
+    // The project's PDF and SyncTeX data must not stay in memory after the
+    // project is gone.
+    invalidateBuild(id);
+
     return reply.status(204).send();
   });
 
