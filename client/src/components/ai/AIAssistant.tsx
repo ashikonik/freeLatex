@@ -2,7 +2,11 @@ import { useCallback, useState } from 'react';
 
 import { askAi } from '../../lib/api.js';
 import { AISettingsModal } from './AISettingsModal.js';
-import { readAiSettings, type AiSettings } from './ai-settings.js';
+import {
+  boundSource,
+  readAiSettings,
+  type AiSettings,
+} from './ai-settings.js';
 
 /** The things the assistant can be asked to do. */
 export const ASSISTANT_TASKS = [
@@ -38,11 +42,10 @@ export type AssistantTask = (typeof ASSISTANT_TASKS)[number]['id'];
 /**
  * How much of the document is sent to the provider.
  *
- * A whole thesis is more than any provider's context holds and more than
- * the reader wants to pay for, so only the beginning of the document is
- * sent. The reader is told when that happens.
+ * The bound is shared with the error-fixing assistant, so both send the same
+ * amount of the document.
  */
-export const MAX_SOURCE_CHARS = 12_000;
+export { MAX_SOURCE_CHARS } from './ai-settings.js';
 
 /** The properties of the assistant. */
 export interface AIAssistantProps {
@@ -71,7 +74,12 @@ export function AIAssistant({ source, onApply }: AIAssistantProps): React.ReactE
   const [asking, setAsking] = useState(false);
 
   const ask = useCallback(async (): Promise<void> => {
-    if (!settings?.apiKey) {
+    // The settings are read again here rather than taken from the state, so
+    // that a key saved in another tab, or one saved while this assistant was
+    // mounted, is used rather than asked for again.
+    const current = readAiSettings();
+    if (!current?.apiKey) {
+      setSettings(undefined);
       setSettingsOpen(true);
       return;
     }
@@ -86,14 +94,13 @@ export function AIAssistant({ source, onApply }: AIAssistantProps): React.ReactE
     setNotice(undefined);
     setAnswer(undefined);
     try {
-      const trimmed =
-        source.length > MAX_SOURCE_CHARS ? source.slice(0, MAX_SOURCE_CHARS) : source;
+      const trimmed = boundSource(source);
       if (trimmed.length < source.length) {
         setNotice(
           'The document is longer than the assistant takes, so only its beginning was sent.',
         );
       }
-      const text = await askAi(settings.provider, settings.apiKey, {
+      const text = await askAi(current.provider, current.apiKey, {
         prompt: question.trim() ? `${chosen.prompt}\n\n${question.trim()}` : chosen.prompt,
         source: trimmed,
       });
@@ -103,7 +110,7 @@ export function AIAssistant({ source, onApply }: AIAssistantProps): React.ReactE
     } finally {
       setAsking(false);
     }
-  }, [settings, task, question, source]);
+  }, [task, question, source]);
 
   return (
     <aside className="flex h-full flex-col bg-slate-50" data-testid="ai-assistant">

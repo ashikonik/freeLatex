@@ -42,6 +42,8 @@ export function HistoryModal({
    * this is what the comparison is actually against.
    */
   const [comparedWith, setComparedWith] = useState<string | undefined>(undefined);
+  /** Whether the difference of the selected revision is on its way. */
+  const [diffLoading, setDiffLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | undefined>(undefined);
   const [restoring, setRestoring] = useState(false);
@@ -80,9 +82,15 @@ export function HistoryModal({
     if (!selected) {
       setDiffs([]);
       setComparedWith(undefined);
+      setDiffLoading(false);
       return;
     }
     let cancelled = false;
+    // The old difference is taken away at once: showing it while the new one
+    // is on its way would name the wrong revision.
+    setDiffLoading(true);
+    setDiffs([]);
+    setComparedWith(undefined);
     void diffSnapshot(projectId, selected)
       .then(({ diffs: found, to }) => {
         if (!cancelled) {
@@ -93,6 +101,11 @@ export function HistoryModal({
       .catch((cause: unknown) => {
         if (!cancelled) {
           setError(cause instanceof Error ? cause.message : 'The difference could not be read.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setDiffLoading(false);
         }
       });
     return () => {
@@ -184,7 +197,9 @@ export function HistoryModal({
           </div>
 
           <div className="min-w-0 flex-1 overflow-auto p-4">
-            {diffs.length === 0 ? (
+            {diffLoading ? (
+              <p className="text-sm text-slate-500">Loading the difference…</p>
+            ) : diffs.length === 0 ? (
               <p className="text-sm text-slate-500">No differences to show.</p>
             ) : (
               <>

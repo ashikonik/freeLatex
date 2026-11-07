@@ -19,6 +19,25 @@ export const PROVIDER_NAMES: Record<AiProvider, string> = {
 /** The key of the settings in the browser's storage. */
 const STORAGE_KEY = 'freelatex.ai';
 
+/**
+ * How much of the document is sent to the provider.
+ *
+ * A whole thesis is more than any provider's context holds and more than the
+ * reader wants to pay for, so only the beginning of the document is sent.
+ * The reader is told when that happens.
+ */
+export const MAX_SOURCE_CHARS = 12_000;
+
+/**
+ * The beginning of a document, cut to what the provider is given.
+ *
+ * @param source The whole document.
+ * @returns The part of it that is sent.
+ */
+export function boundSource(source: string): string {
+  return source.length > MAX_SOURCE_CHARS ? source.slice(0, MAX_SOURCE_CHARS) : source;
+}
+
 /** The assistant's settings. */
 export interface AiSettings {
   /** The provider the assistant talks to. */

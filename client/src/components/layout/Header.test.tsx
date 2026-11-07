@@ -66,4 +66,35 @@ describe('the workspace header', () => {
 
     expect(screen.getByTestId('connection-status')).toHaveTextContent('Offline');
   });
+
+  it('offers the assistant when there is one to offer', () => {
+    const onAssistant = vi.fn();
+    render(<Header {...BASE} onAssistant={onAssistant} />);
+
+    fireEvent.click(screen.getByTestId('assistant-button'));
+
+    expect(onAssistant).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the assistant out when there is none', () => {
+    render(<Header {...BASE} />);
+
+    expect(screen.queryByTestId('assistant-button')).not.toBeInTheDocument();
+  });
+
+  it('offers to fix the errors the build reported', () => {
+    const onFixErrors = vi.fn();
+    render(<Header {...BASE} onFixErrors={onFixErrors} errorCount={3} />);
+
+    fireEvent.click(screen.getByTestId('fix-errors-button'));
+
+    expect(onFixErrors).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('fix-errors-button')).toHaveTextContent('Fix 3 errors');
+  });
+
+  it('leaves the error fix out when nothing is wrong', () => {
+    render(<Header {...BASE} onFixErrors={vi.fn()} errorCount={0} />);
+
+    expect(screen.queryByTestId('fix-errors-button')).not.toBeInTheDocument();
+  });
 });

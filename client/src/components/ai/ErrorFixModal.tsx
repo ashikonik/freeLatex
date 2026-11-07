@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 
 import { askAi } from '../../lib/api.js';
 import { useEscapeToClose } from '../use-modal.js';
-import { readAiSettings } from './ai-settings.js';
+import { boundSource, readAiSettings } from './ai-settings.js';
 
 /** The properties of the error-fixing dialog. */
 export interface ErrorFixModalProps {
@@ -31,6 +31,8 @@ export function ErrorFixModal({
 }: ErrorFixModalProps): React.ReactElement {
   const [fixed, setFixed] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
+  /** A note about what was sent, as opposed to a failure. */
+  const [notice, setNotice] = useState<string | undefined>(undefined);
   const [working, setWorking] = useState(false);
 
   useEscapeToClose(onClose);
@@ -44,14 +46,23 @@ export function ErrorFixModal({
 
     setWorking(true);
     setError(undefined);
+    setNotice(undefined);
     try {
+      // Only the beginning of the document is sent: the rest is more than
+      // the provider takes, and the reader is told when it was cut.
+      const trimmed = boundSource(source);
+      if (trimmed.length < source.length) {
+        setNotice(
+          'The document is longer than the assistant takes, so only its beginning was sent.',
+        );
+      }
       const text = await askAi(settings.provider, settings.apiKey, {
         prompt: [
           'The LaTeX document below does not compile.',
           'Fix the errors and give the whole corrected document, ready to paste.',
           'Change nothing else about it.',
         ].join(' '),
-        source,
+        source: trimmed,
         errors,
       });
       setFixed(text);
@@ -101,6 +112,10 @@ export function ErrorFixModal({
             <p role="alert" className="mb-3 rounded bg-red-50 p-2 text-sm text-red-700">
               {error}
             </p>
+          ) : null}
+
+          {notice ? (
+            <p className="mb-3 rounded bg-amber-50 p-2 text-sm text-amber-800">{notice}</p>
           ) : null}
 
           {fixed ? (

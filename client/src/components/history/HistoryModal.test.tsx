@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import { HistoryModal } from './HistoryModal.js';
 
@@ -109,5 +109,38 @@ describe('the document history', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
 
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('takes the old difference away while the new one is on its way', async () => {
+    // A difference that is still on the screen while another revision is
+    // picked would name the wrong revision, so it is taken away at once.
+    const held = {
+      from: 'snap_2',
+      to: 'snap_2',
+      diffs: [{ path: 'main.tex', patch: '-old\n+new\n', addedLines: 1, removedLines: 1 }],
+    };
+    let answer: (value: unknown) => void = () => undefined;
+    // The first call is the difference of the newest revision and answers at
+    // once; the second one, for the revision that is picked, is held back.
+    diffSnapshot.mockResolvedValueOnce(held);
+    diffSnapshot.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+
+    render(<HistoryModal projectId="prj_1" onClose={vi.fn()} onRestored={vi.fn()} />);
+
+    await waitFor(() => expect(screen.getByTestId('diff-file')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('First draft'));
+
+    await waitFor(() => expect(screen.queryByTestId('diff-file')).not.toBeInTheDocument());
+    expect(screen.getByText(/Loading the difference/)).toBeInTheDocument();
+
+    act(() => {
+      answer(held);
+    });
   });
 });

@@ -135,4 +135,20 @@ describe('the writing assistant', () => {
 
     await waitFor(() => expect(screen.getByText(/only its beginning was sent/)).toBeInTheDocument());
   });
+
+  it('uses a key that was stored after the assistant was mounted', async () => {
+    // The assistant is mounted before the key exists, so the key has to be
+    // read when the question is asked rather than when the assistant opens.
+    askAi.mockResolvedValue('The polished text.');
+
+    render(<AIAssistant source="" onApply={vi.fn()} />);
+
+    storeAiSettings({ provider: 'openai', apiKey: 'sk-later' });
+
+    fireEvent.click(screen.getByTestId('ai-ask'));
+
+    await waitFor(() => expect(askAi).toHaveBeenCalledTimes(1));
+    const [, key] = askAi.mock.calls[0] as [string, string, { source: string }];
+    expect(key).toBe('sk-later');
+  });
 });
