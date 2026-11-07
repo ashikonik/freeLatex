@@ -10,6 +10,7 @@ import { authRoutes, loginRoutes } from './routes/auth.js';
 import { projectRoutes } from './routes/projects.js';
 import { shareRoutes } from './routes/share.js';
 import { snapshotRoutes } from './routes/snapshots.js';
+import { compileRoutes } from './routes/compile.js';
 import { ProjectStorage } from './services/storage.js';
 import { SnapshotService } from './services/snapshot.js';
 import { join } from 'node:path';
@@ -86,6 +87,7 @@ export async function buildApp(options: AppOptions = {}): Promise<BuiltApp> {
     await scoped.register(shareRoutes, { context });
     await scoped.register(projectRoutes, { context, storage });
     await scoped.register(snapshotRoutes, { context, snapshots });
+    await scoped.register(compileRoutes, { context, storage });
   });
 
   app.setErrorHandler((error: FastifyError, request, reply) => {

@@ -7,6 +7,7 @@ import { projects, users } from '../db/schema.js';
 import { hashSecret } from '../utils/hash.js';
 import { ProjectStorage, newProjectId } from '../services/storage.js';
 import { PathEscapeError } from '../services/paths.js';
+import { invalidateBuild } from './compile.js';
 
 interface CreateProjectBody {
   title?: string;
@@ -242,6 +243,9 @@ export async function projectRoutes(
 
     context.db.update(projects).set({ updatedAt: new Date() }).where(eq(projects.id, id)).run();
 
+    // The cached PDF no longer matches the sources, so it must not be served.
+    invalidateBuild(id);
+
     return reply.send({ path: relativePath, bytes: Buffer.byteLength(body.content, 'utf8') });
   });
 
@@ -265,6 +269,9 @@ export async function projectRoutes(
       const message = error instanceof Error ? error.message : 'Could not delete the file.';
       return reply.status(400).send({ error: message });
     }
+
+    // The cached PDF no longer matches the sources, so it must not be served.
+    invalidateBuild(id);
 
     return reply.status(204).send();
   });

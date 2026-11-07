@@ -178,6 +178,98 @@ async function main(): Promise<void> {
         if (!diffs[0]?.patch.includes('+Again')) {
           throw new Error('probe: diff patch is missing the added line');
         }
+
+        // Step 6: compile the project for real and check that the result is
+        // a valid PDF with usable SyncTeX data.
+        await app.inject({
+          method: 'PUT',
+          url: `/api/projects/${projectId}/files/main.tex`,
+          headers: auth,
+          payload: {
+            content:
+              '\\documentclass{article}\n\\begin{document}\nHi\n\\section{Probe}\nProbe body\n\\end{document}\n',
+          },
+        });
+
+        const compiled = await app.inject({
+          method: 'POST',
+          url: `/api/projects/${projectId}/compile`,
+          headers: auth,
+        });
+        if (compiled.statusCode !== 200) {
+          throw new Error(`probe: compilation returned ${compiled.statusCode}`);
+        }
+        const compileBody = compiled.json();
+        if (compileBody.success !== true) {
+          throw new Error('probe: compilation reported a failure');
+        }
+        if (compileBody.pageCount < 1) {
+          throw new Error('probe: compilation reported no pages');
+        }
+
+        const pdf = await app.inject({
+          method: 'GET',
+          url: `/api/projects/${projectId}/pdf`,
+          headers: auth,
+        });
+        if (pdf.statusCode !== 200) {
+          throw new Error(`probe: pdf download returned ${pdf.statusCode}`);
+        }
+        // The PDF must be a real PDF: every document starts with this header.
+        if (pdf.rawPayload.subarray(0, 8).toString('ascii') !== '%PDF-1.5') {
+          throw new Error(
+            `probe: compiled output is not a %PDF-1.5 document (got "${pdf.rawPayload
+              .subarray(0, 8)
+              .toString('ascii')}")`,
+          );
+        }
+
+        // The SyncTeX data must support both directions of the jump.
+        const syncTex = await app.inject({
+          method: 'GET',
+          url: `/api/projects/${projectId}/synctex`,
+          headers: auth,
+        });
+        if (syncTex.statusCode !== 200) {
+          throw new Error(`probe: synctex query returned ${syncTex.statusCode}`);
+        }
+        const mainFile = (syncTex.json().files as string[]).find((name) =>
+          name.endsWith('main.tex'),
+        );
+        if (!mainFile) {
+          throw new Error('probe: synctex data does not mention main.tex');
+        }
+
+        const forward = await app.inject({
+          method: 'GET',
+          url: `/api/projects/${projectId}/synctex/forward?file=${encodeURIComponent(mainFile)}&line=5`,
+          headers: auth,
+        });
+        if (forward.statusCode !== 200) {
+          throw new Error(`probe: forward search returned ${forward.statusCode}`);
+        }
+        const position = forward.json().position as {
+          x: number;
+          y: number;
+          width: number;
+          height: number;
+          page: number;
+        };
+        if (position.width <= 0 || position.height <= 0) {
+          throw new Error('probe: forward search returned a degenerate box');
+        }
+
+        const inverse = await app.inject({
+          method: 'GET',
+          url: `/api/projects/${projectId}/synctex/inverse?x=${position.x + position.width / 2}&y=${position.y + position.height / 2}&page=${position.page}`,
+          headers: auth,
+        });
+        if (inverse.statusCode !== 200) {
+          throw new Error(`probe: inverse search returned ${inverse.statusCode}`);
+        }
+        if ((inverse.json().source as { line: number }).line !== 5) {
+          throw new Error('probe: inverse search did not return the same line');
+        }
       } finally {
         await app.close();
       }

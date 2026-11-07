@@ -11,6 +11,7 @@ import {
   type SnapshotSummary,
 } from '../services/snapshot.js';
 import { ProjectTooLargeError } from '../services/storage.js';
+import { invalidateBuild } from './compile.js';
 
 /**
  * Version control routes.
@@ -157,6 +158,11 @@ export async function snapshotRoutes(
     try {
       const fileCount = await snapshots.rollbackToSnapshot(id, snapshotId);
       context.db.update(projects).set({ updatedAt: new Date() }).where(eq(projects.id, id)).run();
+
+      // The restored files differ from the sources the cached PDF was built
+      // from, so it must not be served.
+      invalidateBuild(id);
+
       return reply.send({ restored: true, fileCount });
     } catch (error) {
       // A corrupt snapshot must not be reported as "not found": the project
