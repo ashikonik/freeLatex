@@ -150,4 +150,4 @@ server — and name the single origin that is allowed.
 ---
 
 ## 📜 License
-MIT License. Built for open, portable, and unrestricted scientific publishing.
+[MIT License](LICENSE). Built for open, portable, and unrestricted scientific publishing.
