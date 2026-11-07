@@ -377,6 +377,57 @@ A full audit of the delivered system, followed by the fixes it found.
     longer reaches the container's log.
 - **Tag**: `checkpoint-step-11-security-audit`.
 
+### Step 12: Share Links That Open, and a Deployment on a Free Cloud Service
+The share link was minted by the server and understood by the API and the
+collaboration socket, but the client had no route for it. A co-editor who
+followed a link landed on the sign-in page and could not get in at all.
+
+- **12.1**: Two gaps were closed.
+  - **The client had no route for `/p/{id}`.** The project was held in React
+    state, so a link could not open it. The client now reads the link out of
+    the URL, keeps its token as the credential for the visit, and opens the
+    project without asking for a key. A link that has been revoked or has
+    expired is reported plainly, because the reader has no other way to find
+    out what went wrong.
+  - **The server refused a share token carried as a bearer.** The header was
+    sent straight to the account-key check, which does not know about share
+    tokens, so every request from a reader who arrived through a link was
+    refused with a 401. The header's credential is now judged by its shape,
+    exactly as the WebSocket's already was: a `rw_`/`ro_` prefix means a
+    share token, anything else is an account key.
+- **12.2**: The deployment was worked out rather than guessed.
+  - Two things are needed from a host: a WebSocket, or the collaborative
+    editor falls back to polling and the co-editors do not really co-edit;
+    and a disk that outlives the container, or every document the owner
+    writes is lost on the next deploy. Most free tiers have neither —
+    Render, Koyeb, Fly.io, Cloud Run and Azure Container Apps all lack a
+    persistent disk on their free tier, and Fly.io no longer has a free tier
+    at all. Oracle Cloud Always Free is the one that fits, because it is a
+    real machine: no image limit, a 200 GB block volume for the data, and
+    the reverse proxy can be set up as it should be.
+  - The compiler was measured, because it decides what the host needs: a
+    document peaks near 190 MB while Tectonic runs, and the server itself
+    near 41 MB. Railway's free plan allows 0.5 GB, which is too tight for
+    more than one build at a time, so the number of concurrent compilations
+    can now be set with `MAX_CONCURRENT_COMPILATIONS`.
+  - `docker/DEPLOY.md` records the whole procedure — the machine, the block
+    volume, the container, TLS in front of it — and `docker/DEPLOY.md`'s
+    sibling `docker/caddy/Caddyfile` and `docker/docker-compose.host.yml`
+    carry the proxy and the compose file it needs.
+- **12.3**: A runtime probe was written, because the unit tests stub the
+  network away and cannot show that a link really opens a project.
+  `scripts/share-probe.mjs` runs against a live server and checks twelve
+  steps: the link opens the project as a bearer and as a query token, reads
+  the files, opens the collaboration socket, may not reach a project it was
+  not minted for, and a read-only link may not write.
+- **Verification**:
+  - Head 1: 298 server tests and 166 client tests pass. Seventeen client
+    tests and four server tests are new.
+  - Head 2: `tsc --noEmit` is clean in both packages.
+  - Head 3: the runtime probe passes all twelve steps against a running
+    server, and the client's production build succeeds.
+- **Tag**: `checkpoint-step-12-share-links-and-deployment`.
+
 ---
 
 ## 6. Verification Plan
