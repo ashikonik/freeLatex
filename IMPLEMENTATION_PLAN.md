@@ -328,6 +328,57 @@ The implementation is broken down into **10 granular, sequential micro-steps**. 
 
 ---
 
+### Step 11: Security Audit & Hardening
+A full audit of the delivered system, followed by the fixes it found.
+- **11.1**: The audit covered tenant isolation, path traversal, the scope of a
+  share token, the AI proxy, the compiler and the handling of secrets.
+  - Tenant isolation holds: every project-scoped route asks
+    `canAccessProject` before it reads or writes anything.
+  - Path traversal is blocked: the lexical check and the symlink-aware check
+    together stop every escape that was tried.
+  - A share token reaches exactly one project, a read-only one may not
+    change anything, and it may not spend the owner's AI key — it is refused
+    by the assistant with a 403 and refused at the collaboration socket.
+  - The compiler is spawned with an argument array and no shell, so a
+    document cannot run a command.
+- **11.2**: Three findings were fixed.
+  - **A share token reached the log.** The browser's WebSocket API cannot set
+    a header, so a share token travels in the query string of the upgrade
+    request — and the request's URL is part of every log line. Anyone who
+    could read the container's log could read every live share token. The
+    logger's request serializer now keeps the path and drops the query
+    string.
+  - **Cross-origin access reflected any origin with credentials.** The
+    server serves the client itself, so it needs no cross-origin access at
+    all. A new `CORS_ORIGIN` names the single origin that may call the API
+    from a browser; unset, no origin is allowed.
+  - **The compiler had no concurrency limit.** A client could ask for a
+    hundred builds at once and take every core of the server. The number of
+    compilations running at the same time is now bounded, and the ones that
+    wait queue instead of starting.
+  - The sign-in endpoint was throttled as well: ten failures from one
+    address in a minute, and the eleventh attempt is refused.
+- **11.3**: The documents were corrected against the code that was actually
+  written: the automatic snapshots and the rollback broadcast that the plan
+  named are not implemented, Ollama is not a supported provider, the zip
+  library is `yauzl`, the WebSocket server speaks the protocol itself
+  rather than through `setupWSConnection`, the image weighs 1.82 GB, and the
+  quickstart names the right directories.
+- **Verification**:
+  - Head 1: 294 server tests and 149 client tests pass. Nine of the server
+    tests are new and cover the three fixes; the concurrency test was
+    checked to fail without the gate — the peak was 7 simultaneous
+    compilations, and it is 4 with it.
+  - Head 2: `tsc --noEmit` is clean in both packages.
+  - Head 3: the runtime probe passes, and the image was rebuilt and probed
+    again — the health check, the client's page, Tectonic and a real PDF all
+    work, the deep probe passes, and two clients of the collaboration socket
+    see each other's writes. The log check confirms that a share token no
+    longer reaches the container's log.
+- **Tag**: `checkpoint-step-11-security-audit`.
+
+---
+
 ## 6. Verification Plan
 
 ### Automated Tests

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "freeLatex",
-  "updated_at": "2026-11-07T09:53:51Z",
+  "updated_at": "2026-11-07T11:23:54Z",
   "tasks": [
     {
       "id": "T-001",
@@ -34,6 +34,44 @@
         },
         {
           "at": "2026-11-07T09:53:51Z",
+          "from": "in_progress",
+          "to": "done",
+          "actor": "orchestrator",
+          "note": ""
+        }
+      ]
+    },
+    {
+      "id": "T-002",
+      "title": "Step 11: Security audit & hardening",
+      "body": "",
+      "state": "done",
+      "labels": [
+        "step-11",
+        "security"
+      ],
+      "assignee": null,
+      "blocked_by": [],
+      "branch": "step-10-delivery",
+      "created_at": "2026-11-07T11:23:46Z",
+      "updated_at": "2026-11-07T11:23:54Z",
+      "history": [
+        {
+          "at": "2026-11-07T11:23:46Z",
+          "from": null,
+          "to": "todo",
+          "actor": "orchestrator",
+          "note": "created"
+        },
+        {
+          "at": "2026-11-07T11:23:53Z",
+          "from": "todo",
+          "to": "in_progress",
+          "actor": "orchestrator",
+          "note": ""
+        },
+        {
+          "at": "2026-11-07T11:23:54Z",
           "from": "in_progress",
           "to": "done",
           "actor": "orchestrator",
