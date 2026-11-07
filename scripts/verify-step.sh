@@ -9,6 +9,10 @@
 #   Head 2 — TypeScript strict compilation (tsc --noEmit)
 #   Head 3 — Runtime functional probe (server boots, HTTP endpoint responds)
 #
+# The client package has its own three heads, which VERIFY_TARGET selects:
+#   VERIFY_TARGET=client — Vitest component tests, client tsc --noEmit,
+#                          and a Vite production build
+#
 # On success: writes .dev_logs/step_<N>.log + .dev_logs/step_<N>.patch,
 #             commits, and tags checkpoint-step-<NN>-<slug>.
 # On failure: exits non-zero and prints the rollback command to run.
@@ -32,6 +36,8 @@ mkdir -p "$LOG_DIR"
 STEP_PADDED="$(printf '%02d' "$STEP")"
 # Optional slug suffix for the checkpoint tag, e.g. STEP_SLUG=git-init
 STEP_SLUG="${STEP_SLUG:-}"
+# Which package the heads run against: "server" (the default) or "client".
+VERIFY_TARGET="${VERIFY_TARGET:-server}"
 
 exec > >(tee "$LOG_FILE") 2>&1
 
@@ -47,7 +53,19 @@ HEAD3_FAILED=0
 # ---------------------------------------------------------------- Head 1
 echo ""
 echo "--- Head 1: Vitest unit & integration tests ---"
-if [[ -d server/node_modules ]]; then
+if [[ "$VERIFY_TARGET" == "client" ]]; then
+  if [[ -d client/node_modules ]]; then
+    if (cd client && npx vitest run --reporter=dot); then
+      echo "HEAD 1 PASS"
+    else
+      echo "HEAD 1 FAIL"
+      HEAD1_FAILED=1
+    fi
+  else
+    echo "SKIP: client/node_modules not installed yet"
+    echo "HEAD 1 PASS (skipped)"
+  fi
+elif [[ -d server/node_modules ]]; then
   if (cd server && npx vitest run --reporter=dot); then
     echo "HEAD 1 PASS"
   else
@@ -62,7 +80,19 @@ fi
 # ---------------------------------------------------------------- Head 2
 echo ""
 echo "--- Head 2: TypeScript strict compilation (tsc --noEmit) ---"
-if [[ -d server/node_modules ]]; then
+if [[ "$VERIFY_TARGET" == "client" ]]; then
+  if [[ -d client/node_modules ]]; then
+    if (cd client && npx tsc --noEmit); then
+      echo "HEAD 2 PASS"
+    else
+      echo "HEAD 2 FAIL"
+      HEAD2_FAILED=1
+    fi
+  else
+    echo "SKIP: client/node_modules not installed yet"
+    echo "HEAD 2 PASS (skipped)"
+  fi
+elif [[ -d server/node_modules ]]; then
   if (cd server && npx tsc --noEmit); then
     echo "HEAD 2 PASS"
   else
@@ -76,17 +106,32 @@ fi
 
 # ---------------------------------------------------------------- Head 3
 echo ""
-echo "--- Head 3: Runtime functional probe ---"
-if [[ -d server/node_modules ]] && [[ -f server/src/probe.ts ]]; then
-  if (cd server && npm run --silent probe); then
-    echo "HEAD 3 PASS"
+if [[ "$VERIFY_TARGET" == "client" ]]; then
+  echo "--- Head 3: Vite production build ---"
+  if [[ -d client/node_modules ]]; then
+    if (cd client && npx vite build); then
+      echo "HEAD 3 PASS"
+    else
+      echo "HEAD 3 FAIL"
+      HEAD3_FAILED=1
+    fi
   else
-    echo "HEAD 3 FAIL"
-    HEAD3_FAILED=1
+    echo "SKIP: client/node_modules not installed yet"
+    echo "HEAD 3 PASS (skipped)"
   fi
 else
-  echo "SKIP: server runtime not yet implemented"
-  echo "HEAD 3 PASS (skipped)"
+  echo "--- Head 3: Runtime functional probe ---"
+  if [[ -d server/node_modules ]] && [[ -f server/src/probe.ts ]]; then
+    if (cd server && npm run --silent probe); then
+      echo "HEAD 3 PASS"
+    else
+      echo "HEAD 3 FAIL"
+      HEAD3_FAILED=1
+    fi
+  else
+    echo "SKIP: server runtime not yet implemented"
+    echo "HEAD 3 PASS (skipped)"
+  fi
 fi
 
 # ---------------------------------------------------------------- Verdict
