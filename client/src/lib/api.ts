@@ -210,6 +210,106 @@ export function buildMetadata(projectId: string): Promise<BuildMetadata> {
 }
 
 /**
+ * Compile a project on the server.
+ *
+ * The server answers with the PDF itself, so the bytes come back as an
+ * array buffer.
+ */
+export function compileProject(
+  projectId: string,
+  mainFile?: string,
+): Promise<ArrayBuffer> {
+  return apiRequest<ArrayBuffer>(`/projects/${projectId}/compile`, {
+    method: 'POST',
+    body: mainFile ? { mainFile } : {},
+    raw: true,
+  });
+}
+
+/** The PDF of the most recent build of a project. */
+export function fetchPdf(projectId: string): Promise<ArrayBuffer> {
+  return apiRequest<ArrayBuffer>(`/projects/${projectId}/pdf`, { raw: true });
+}
+
+/** A rectangle on a page, in PDF points, measured from the bottom-left. */
+export interface SyncPosition {
+  page: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** A place in the source, relative to the project root. */
+export interface SyncSourceLocation {
+  file: string;
+  line: number;
+  page?: number;
+}
+
+/** The answer of a forward search: a source line and where it is on the page. */
+export interface ForwardSearchResult {
+  source: SyncSourceLocation;
+  position: SyncPosition;
+}
+
+/** The answer of an inverse search: a place on the page and the source of it. */
+export interface InverseSearchResult {
+  position: SyncPosition;
+  source: SyncSourceLocation;
+}
+
+/**
+ * Forward search: where does a source line appear on the page?
+ *
+ * A line with no entry in the SyncTeX data is not an error the caller has to
+ * handle — a document may simply not have that line typeset — so the answer
+ * is `undefined` rather than a rejection.
+ */
+export async function forwardSearch(
+  projectId: string,
+  file: string,
+  line: number,
+): Promise<ForwardSearchResult | undefined> {
+  try {
+    const query = new URLSearchParams({ file, line: String(line) });
+    return await apiRequest<ForwardSearchResult>(
+      `/projects/${projectId}/synctex/forward?${query.toString()}`,
+    );
+  } catch (error) {
+    if (error instanceof ApiError && error.statusCode === 404) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Inverse search: which source line produced a point on the page?
+ *
+ * A point that no source line produced has no answer, and that is not an
+ * error either.
+ */
+export async function inverseSearch(
+  projectId: string,
+  x: number,
+  y: number,
+  page: number,
+): Promise<InverseSearchResult | undefined> {
+  try {
+    const query = new URLSearchParams({ x: String(x), y: String(y), page: String(page) });
+    return await apiRequest<InverseSearchResult>(
+      `/projects/${projectId}/synctex/inverse?${query.toString()}`,
+    );
+  } catch (error) {
+    if (error instanceof ApiError && error.statusCode === 404) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/**
  * Encode a file path for a URL.
  *
  * A path holds slashes, and the API expects them to survive, so each segment

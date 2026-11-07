@@ -65,6 +65,21 @@ docker build -f docker/Dockerfile -t freelatex .
 docker run -p 3000:3000 -e ADMIN_API_KEY="my-secret" -v freelatex_data:/app/data freelatex
 ```
 
+### 4. Frontend
+```bash
+cd client
+npm install
+npm run download-assets   # fetches the BusyTeX WebAssembly engine (~520 MB, once)
+npm run dev               # http://127.0.0.1:5173
+```
+
+The `download-assets` step is required only for the **⚡ Instant Wasm Preview**
+mode. The assets are not committed to the repository; they are fetched from
+the [texlyre-busytex](https://github.com/TeXlyre/texlyre-busytex) release
+archive and served from `client/public/core/busytex`. Without them the
+**🖥️ Server Tectonic Build** mode still works, because it compiles on the
+server.
+
 ---
 
 ## 📜 License

@@ -67,6 +67,14 @@ export interface CodeMirrorEditorProps {
   readOnly?: boolean;
   /** Called when the cursor moves, so the PDF can follow it. */
   onCursorLineChange?: (line: number) => void;
+  /**
+   * The line the cursor should be moved to.
+   *
+   * The line is the one an inverse search found, so a reader who clicks a
+   * spot on the page lands on the source that produced it. The line is
+   * applied once, and the property is then left alone.
+   */
+  cursorTarget?: { line: number; token: number } | undefined;
 }
 
 /**
@@ -81,6 +89,7 @@ export function CodeMirrorEditor({
   awareness,
   readOnly = false,
   onCursorLineChange,
+  cursorTarget,
 }: CodeMirrorEditorProps): React.ReactElement {
   const host = useRef<HTMLDivElement | null>(null);
   const view = useRef<EditorView | null>(null);
@@ -137,6 +146,26 @@ export function CodeMirrorEditor({
       view.current = null;
     };
   }, [doc, extensions]);
+
+  // The cursor is moved to the line an inverse search found. The token makes
+  // the move happen once per request, so a re-render does not pull the
+  // reader's cursor away from where they put it.
+  useEffect(() => {
+    if (!cursorTarget) {
+      return;
+    }
+    const instance = view.current;
+    if (!instance) {
+      return;
+    }
+    const total = instance.state.doc.lines;
+    const line = Math.min(Math.max(cursorTarget.line, 1), total);
+    const position = instance.state.doc.line(line).from;
+    instance.dispatch({
+      selection: { anchor: position },
+      scrollIntoView: true,
+    });
+  }, [cursorTarget]);
 
   // The presence of the other clients is read from the awareness instance,
   // which changes whenever somebody moves their cursor or leaves.

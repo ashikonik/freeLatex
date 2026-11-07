@@ -8,6 +8,9 @@ dist/
 build/
 *.tsbuildinfo
 
+# BusyTeX WebAssembly assets (fetched with `npm run download-assets`)
+client/public/core/
+
 # Runtime data (SQLite DB + project files)
 data/
 *.db
