@@ -28,10 +28,28 @@ export interface FileTreeNode {
   children?: FileTreeNode[];
 }
 
+/**
+ * One diagnostic of a compilation.
+ *
+ * The shape mirrors the server's `CompileError`, so a diagnostic survives the
+ * trip from the compiler to the screen without being re-shaped on the way.
+ */
+export interface CompileError {
+  severity: 'error' | 'warning';
+  /** The error text without the leading "!" or "LaTeX Warning:" prefix. */
+  message: string;
+  /** The source file the diagnostic refers to, relative to the project root. */
+  file?: string;
+  /** 1-based line number within that file. */
+  line?: number;
+  /** The source line the diagnostic points at. */
+  context?: string;
+}
+
 /** The diagnostics of the most recent build. */
 export interface BuildMetadata {
   success: boolean;
-  errors: string[];
+  errors: CompileError[];
   durationMs: number;
   pageCount: number;
   hasSyncTex: boolean;
@@ -46,6 +64,33 @@ export class ApiError extends Error {
     super(message);
     this.name = 'ApiError';
     this.statusCode = statusCode;
+  }
+}
+
+/**
+ * A build that failed, with the compiler's own diagnostics.
+ *
+ * The server answers a failed build with a 422 whose body holds the
+ * diagnostics, the log and the reason. A generic `ApiError` would throw all
+ * of that away and leave the reader with "the request failed with status
+ * 422", which is the one thing they already knew.
+ */
+export class CompileFailedError extends Error {
+  readonly errors: CompileError[];
+  readonly log: string;
+  readonly failureReason: string;
+
+  constructor(
+    message: string,
+    errors: CompileError[],
+    log: string,
+    failureReason: string,
+  ) {
+    super(message);
+    this.name = 'CompileFailedError';
+    this.errors = errors;
+    this.log = log;
+    this.failureReason = failureReason;
   }
 }
 
@@ -150,6 +195,36 @@ export function deleteProject(id: string): Promise<{ success: boolean }> {
   return apiRequest<{ success: boolean }>(`/projects/${id}`, { method: 'DELETE' });
 }
 
+/**
+ * Rename a project.
+ *
+ * The route accepts a title and a main file, and either may be left out —
+ * only the fields that are sent are changed.
+ */
+export function renameProject(id: string, title: string): Promise<{ id: string; title: string }> {
+  return apiRequest<{ id: string; title: string }>(`/projects/${id}`, {
+    method: 'PATCH',
+    body: { title },
+  });
+}
+
+/**
+ * Set the file the project is built from.
+ *
+ * The main file is the project's entry point: the server builds it, and
+ * every reader of the project — including one who arrived through a share
+ * link — previews the same document.
+ */
+export function setProjectMainFile(
+  id: string,
+  mainFile: string,
+): Promise<{ id: string; mainFile: string }> {
+  return apiRequest<{ id: string; mainFile: string }>(`/projects/${id}`, {
+    method: 'PATCH',
+    body: { mainFile },
+  });
+}
+
 /** The result of importing a zip archive. */
 export interface ImportResult {
   id: string;
@@ -236,17 +311,91 @@ export function buildMetadata(projectId: string): Promise<BuildMetadata> {
  * Compile a project on the server.
  *
  * The server answers with the PDF itself, so the bytes come back as an
- * array buffer.
+ * array buffer. A build that fails is answered with a 422 carrying the
+ * compiler's diagnostics, and those are raised as a `CompileFailedError` so
+ * the caller can show the reader where the document went wrong.
  */
-export function compileProject(
+export async function compileProject(
   projectId: string,
   mainFile?: string,
 ): Promise<ArrayBuffer> {
-  return apiRequest<ArrayBuffer>(`/projects/${projectId}/compile`, {
+  const response = await fetch(`/api/projects/${projectId}/compile`, {
     method: 'POST',
-    body: mainFile ? { mainFile } : {},
-    raw: true,
+    headers: compileHeaders(),
+    body: JSON.stringify(mainFile ? { mainFile } : {}),
   });
+
+  if (response.ok) {
+    return await response.arrayBuffer();
+  }
+
+  // The failure body is the diagnostics. A build that never started — a
+  // missing compiler, a timeout — answers with `{ error }` instead, and
+  // that message is the whole answer.
+  const body = (await readJson(response)) as {
+    error?: string;
+    errors?: CompileError[];
+    log?: string;
+    failureReason?: string;
+  };
+
+  if (Array.isArray(body.errors)) {
+    throw new CompileFailedError(
+      summarise(body.errors),
+      body.errors,
+      body.log ?? '',
+      body.failureReason ?? 'no-output',
+    );
+  }
+
+  throw new ApiError(
+    response.status,
+    body.error ?? `The compilation failed with status ${response.status}.`,
+  );
+}
+
+/**
+ * The headers a compile request carries.
+ *
+ * The credential comes from the same place every other request takes it
+ * from, so a reader who arrived through a share link compiles with the
+ * share token.
+ */
+function compileHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  const key = credentialOf();
+  if (key) {
+    headers.authorization = `Bearer ${key}`;
+  }
+  return headers;
+}
+
+/**
+ * Read a response body as JSON, tolerating one that is not JSON.
+ */
+async function readJson(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * One line describing a failed build.
+ *
+ * The message is what a reader sees when the diagnostics are not rendered,
+ * so it names the first real error rather than counting them.
+ */
+function summarise(errors: CompileError[]): string {
+  const first = errors.find((error) => error.severity === 'error') ?? errors[0];
+  if (!first) {
+    return 'The compilation failed.';
+  }
+  const where = first.file
+    ? ` (${first.file}${first.line ? `:${first.line}` : ''})`
+    : '';
+  return `${first.message}${where}`;
 }
 
 /** The PDF of the most recent build of a project. */

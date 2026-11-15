@@ -1,13 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  BiberNotFoundError,
   CompilerNotFoundError,
   CompileTimeoutError,
   compileProject,
+  needsBiber,
+  parseBiberErrors,
   parseCompilerErrors,
+  resolveBiberBinary,
   resolveTectonicBinary,
 } from './compiler.js';
 
@@ -290,4 +294,293 @@ describe('compileProject', () => {
     expect(result.success).toBe(false);
     expect(result.pdf).toBeUndefined();
   });
+});
+
+/**
+ * True when biber is installed.
+ *
+ * The biber tests need the real binary, so they are skipped rather than
+ * failed when it is absent — the same rule the tectonic tests follow.
+ */
+async function biberAvailable(): Promise<boolean> {
+  return (await resolveBiberBinary()) !== undefined;
+}
+
+/**
+ * A document that uses biblatex.
+ *
+ * The `addbibresource` and `printbibliography` commands are what mark a
+ * document as a biblatex one.
+ */
+const BIBLATEX_DOCUMENT = `\\documentclass{article}
+\\usepackage[backend=biber]{biblatex}
+\\addbibresource{refs.bib}
+\\begin{document}
+Hello, world.\\cite{knuth1984}
+\\printbibliography
+\\end{document}
+`;
+
+const CLASSIC_DOCUMENT = `\\documentclass{article}
+\\begin{document}
+Hello, world.
+\\end{document}
+`;
+
+describe('needsBiber', () => {
+  it('recognises a biblatex document', async () => {
+    await writeTex('main.tex', BIBLATEX_DOCUMENT);
+
+    expect(await needsBiber(workDir, 'main.tex')).toBe(true);
+  });
+
+  it('does not claim a classic document needs biber', async () => {
+    await writeTex('main.tex', CLASSIC_DOCUMENT);
+
+    expect(await needsBiber(workDir, 'main.tex')).toBe(false);
+  });
+
+  it('finds the commands in a file the main file includes', async () => {
+    // The resource is often added in the preamble and the bibliography is
+    // printed in the body, so the check has to look at both.
+    await writeTex(
+      'main.tex',
+      '\\documentclass{article}\n\\input{preamble}\n\\begin{document}\nHi.\n\\end{document}\n',
+    );
+    await writeTex('preamble.tex', '\\usepackage[backend=biber]{biblatex}\n\\addbibresource{r.bib}\n');
+
+    expect(await needsBiber(workDir, 'main.tex')).toBe(true);
+  });
+
+  it('is false for a file that is not there', async () => {
+    expect(await needsBiber(workDir, 'absent.tex')).toBe(false);
+  });
+});
+
+describe('parseBiberErrors', () => {
+  it('reads an error header with its file and line', () => {
+    const errors = parseBiberErrors(
+      'ERROR - Error at line 63 of file sample-base.bib:',
+    );
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.severity).toBe('error');
+    expect(errors[0]?.file).toBe('sample-base.bib');
+    expect(errors[0]?.line).toBe(63);
+  });
+
+  it('reads a warning header as a warning', () => {
+    const errors = parseBiberErrors('WARN - Warning at line 12 of file refs.bib:');
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.severity).toBe('warning');
+  });
+
+  it('reads a summary line without a position', () => {
+    const errors = parseBiberErrors('ERROR - Cannot find control sequence "x"');
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.severity).toBe('error');
+    expect(errors[0]?.message).toContain('Cannot find control sequence');
+  });
+
+  it('ignores ordinary output', () => {
+    const errors = parseBiberErrors('INFO - This is Biber 2.22\nINFO - Logfile is "main.blg"');
+
+    expect(errors).toEqual([]);
+  });
+});
+
+describe('resolveBiberBinary', () => {
+  it('prefers an explicit override', async () => {
+    // The override has to name a file that is there, so the executable
+    // check in the resolver does not reject it.
+    const stub = join(workDir, 'biber-stub');
+    await writeFile(stub, '#!/bin/sh\nexit 0\n', { encoding: 'utf8', mode: 0o755 });
+
+    const previous = process.env.BIBER_BINARY;
+    process.env.BIBER_BINARY = stub;
+    try {
+      expect(await resolveBiberBinary()).toBe(stub);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.BIBER_BINARY;
+      } else {
+        process.env.BIBER_BINARY = previous;
+      }
+    }
+  });
+
+  it('ignores an override that names a file that is not there', async () => {
+    const previous = process.env.BIBER_BINARY;
+    process.env.BIBER_BINARY = join(workDir, 'no-such-biber');
+    try {
+      // The resolver falls through to the usual locations rather than
+      // returning a path that cannot be run.
+      const found = await resolveBiberBinary();
+      expect(found).not.toBe(join(workDir, 'no-such-biber'));
+    } finally {
+      if (previous === undefined) {
+        delete process.env.BIBER_BINARY;
+      } else {
+        process.env.BIBER_BINARY = previous;
+      }
+    }
+  });
+});
+
+describe('the biber path', () => {
+  it('reports a missing biber in an actionable way', async () => {
+    // The binary is pointed at a file that is not there, so the biber path
+    // is chosen but cannot be run.
+    await writeTex('main.tex', BIBLATEX_DOCUMENT);
+
+    await expect(
+      compileProject({
+        projectDir: workDir,
+        mainFile: 'main.tex',
+        timeoutMs: 10_000,
+        binaryPath: (await resolveTectonicBinary()) ?? '/usr/bin/tectonic',
+        biberPath: '',
+      }),
+    ).rejects.toThrow(BiberNotFoundError);
+  }, COMPILE_TEST_TIMEOUT);
+
+  it('leaves a classic document to tectonic\'s own BibTeX', async () => {
+    if (!(await tectonicAvailable())) {
+      return;
+    }
+    await writeTex('main.tex', CLASSIC_DOCUMENT);
+
+    // A biber path that does not exist would fail the build if it were
+    // used, so a successful build proves the classic path was taken.
+    const result = await compileProject({
+      projectDir: workDir,
+      mainFile: 'main.tex',
+      timeoutMs: 60_000,
+      biberPath: join(workDir, 'no-such-biber'),
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.pdf?.subarray(0, 5).toString('ascii')).toBe('%PDF-');
+  }, COMPILE_TEST_TIMEOUT);
+
+  it('builds a biblatex document', async () => {
+    if (!(await tectonicAvailable()) || !(await biberAvailable())) {
+      return;
+    }
+    await writeTex('main.tex', BIBLATEX_DOCUMENT);
+    await writeTex(
+      'refs.bib',
+      '@book{knuth1984,\n  author = {Knuth, Donald E.},\n  title = {The TeXbook},\n  year = {1984},\n  publisher = {Addison-Wesley}\n}\n',
+    );
+
+    const result = await compileProject({
+      projectDir: workDir,
+      mainFile: 'main.tex',
+      timeoutMs: 60_000,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.pdf?.subarray(0, 5).toString('ascii')).toBe('%PDF-');
+  }, COMPILE_TEST_TIMEOUT);
+
+  it('runs biber between the two passes and builds the document', async () => {
+    if (!(await tectonicAvailable())) {
+      return;
+    }
+    // A stand-in for biber: it writes the `.bbl` that the second pass needs
+    // and records that it ran. The real biber is a Perl program, so this
+    // proves that tectonic invokes biber at all rather than proving biber
+    // itself works.
+    //
+    // Tectonic calls biber by its bare name, so the stub has to be called
+    // `biber` and live in a directory of its own.
+    const binDir = join(workDir, 'stub-bin');
+    await mkdir(binDir, { recursive: true });
+    const stub = join(binDir, 'biber');
+    await writeFile(
+      stub,
+      [
+        '#!/bin/sh',
+        'echo "biber ran" >> "$BIBER_MARKER"',
+        'out=$(sed -n "s/^output_directory=//p" "$1.conf")',
+        'printf "\\\\begin{thebibliography}{1}\n',
+        '\\\\bibitem{knuth1984} Knuth, The TeXbook, 1984.\n',
+        '\\\\end{thebibliography}\n" > "$out/$1.bbl"',
+        'exit 0',
+        '',
+      ].join('\n'),
+      { encoding: 'utf8', mode: 0o755 },
+    );
+    const marker = join(workDir, 'biber-marker.txt');
+
+    await writeTex('main.tex', BIBLATEX_DOCUMENT);
+    await writeTex(
+      'refs.bib',
+      '@book{knuth1984,\n  author = {Knuth, Donald E.},\n  title = {The TeXbook},\n  year = {1984},\n  publisher = {Addison-Wesley}\n}\n',
+    );
+
+    const previousMarker = process.env.BIBER_MARKER;
+    process.env.BIBER_MARKER = marker;
+    try {
+      const result = await compileProject({
+        projectDir: workDir,
+        mainFile: 'main.tex',
+        timeoutMs: 60_000,
+        biberPath: stub,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.pdf?.subarray(0, 5).toString('ascii')).toBe('%PDF-');
+    } finally {
+      if (previousMarker === undefined) {
+        delete process.env.BIBER_MARKER;
+      } else {
+        process.env.BIBER_MARKER = previousMarker;
+      }
+    }
+
+    // The stub ran, so tectonic invoked biber by itself.
+    const { readFile } = await import('node:fs/promises');
+    expect(await readFile(marker, 'utf8')).toContain('biber ran');
+  }, COMPILE_TEST_TIMEOUT);
+
+  it('reports the biber errors when biber fails', async () => {
+    if (!(await tectonicAvailable())) {
+      return;
+    }
+    // A stand-in for a biber that cannot read the bibliography.
+    const binDir = join(workDir, 'failing-bin');
+    await mkdir(binDir, { recursive: true });
+    const stub = join(binDir, 'biber');
+    await writeFile(
+      stub,
+      [
+        '#!/bin/sh',
+        'echo "ERROR - Error at line 63 of file refs.bib:"',
+        'echo "Illegal character in name"',
+        'exit 2',
+        '',
+      ].join('\n'),
+      { encoding: 'utf8', mode: 0o755 },
+    );
+
+    await writeTex('main.tex', BIBLATEX_DOCUMENT);
+    await writeTex(
+      'refs.bib',
+      '@book{knuth1984,\n  author = {Knuth, Donald E.},\n  title = {The TeXbook},\n  year = {1984},\n  publisher = {Addison-Wesley}\n}\n',
+    );
+
+    const result = await compileProject({
+      projectDir: workDir,
+      mainFile: 'main.tex',
+      timeoutMs: 60_000,
+      biberPath: stub,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.pdf).toBeUndefined();
+    expect(result.errors.some((e) => e.file === 'refs.bib' && e.line === 63)).toBe(true);
+  }, COMPILE_TEST_TIMEOUT);
 });

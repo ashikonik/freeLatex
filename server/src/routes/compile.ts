@@ -5,6 +5,7 @@ import type { AuthContext } from '../auth/service.js';
 import { canAccessProject } from '../auth/authorize.js';
 import { projects } from '../db/schema.js';
 import {
+  BiberNotFoundError,
   CompilerNotFoundError,
   CompileTimeoutError,
   compileProject,
@@ -80,7 +81,31 @@ export async function compileRoutes(
     }
 
     const body = (request.body ?? {}) as { mainFile?: string };
-    const mainFile = body.mainFile?.trim() || row.mainFile || 'main.tex';
+
+    // The project stores the file it is built from, so every reader of the
+    // project builds the same document — including one who arrived through a
+    // share link. A client may name a file instead, but only if it exists:
+    // a build of a file that is not there would fail with a message that
+    // says nothing about the cause.
+    const requested = body.mainFile?.trim();
+    if (requested) {
+      if (!(await storage.exists(id, requested))) {
+        return reply
+          .status(400)
+          .send({ error: `There is no file named "${requested}" in this project.` });
+      }
+    }
+
+    const mainFile = requested || row.mainFile || 'main.tex';
+
+    if (!(await storage.exists(id, mainFile))) {
+      return reply.status(400).send({
+        error:
+          `The project's main file "${mainFile}" does not exist. ` +
+          'Set the main file to a file that is in the project.',
+        mainFile,
+      });
+    }
 
     let result;
     try {
@@ -94,6 +119,14 @@ export async function compileRoutes(
       // client cannot fix it, so the answer says what has to be installed.
       if (error instanceof CompilerNotFoundError) {
         return reply.status(503).send({ error: error.message });
+      }
+      // The same holds for biber: a biblatex document cannot be built by
+      // tectonic's own BibTeX, so the reader is told what is missing.
+      if (error instanceof BiberNotFoundError) {
+        return reply.status(503).send({
+          error: error.message,
+          failureReason: 'biber-not-found',
+        });
       }
       // A compilation that outlived its budget is reported as a timeout so
       // the client can say so rather than showing a generic failure.

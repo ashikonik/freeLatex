@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 /**
  * How the preview is produced.
@@ -15,6 +15,8 @@ export interface HeaderProps {
   title: string;
   /** The file that is open. */
   activePath: string | undefined;
+  /** The file the project is built from. */
+  mainFile?: string;
   /** How the preview is produced. */
   mode: BuildMode;
   /** Called when the mode changes. */
@@ -33,6 +35,14 @@ export interface HeaderProps {
   status: 'connecting' | 'connected' | 'offline';
   /** Called when the user leaves the workspace. */
   onBack: () => void;
+  /** Called when the reader asks for a build. */
+  onBuild?: (() => void) | undefined;
+  /** Whether the document is rebuilt whenever it changes. */
+  autoBuild?: boolean;
+  /** Called when the automatic build is turned on or off. */
+  onAutoBuildChange?: ((autoBuild: boolean) => void) | undefined;
+  /** Called when the reader renames the project. */
+  onRename?: ((title: string) => void) | undefined;
 }
 
 /**
@@ -56,6 +66,7 @@ const MODE_LABELS: Record<BuildMode, string> = {
 export function Header({
   title,
   activePath,
+  mainFile,
   mode,
   onModeChange,
   onShare,
@@ -65,6 +76,10 @@ export function Header({
   errorCount = 0,
   status,
   onBack,
+  onBuild,
+  autoBuild = true,
+  onAutoBuildChange,
+  onRename,
 }: HeaderProps): React.ReactElement {
   const toggle = useCallback(
     (event: React.ChangeEvent<HTMLSelectElement>): void => {
@@ -93,8 +108,19 @@ export function Header({
         ← Projects
       </button>
 
-      <h1 className="font-medium text-slate-900">{title}</h1>
+      <EditableTitle title={title} onRename={onRename} />
+
       <span className="text-sm text-slate-500">{activePath ?? 'No file open'}</span>
+
+      {mainFile ? (
+        <span
+          className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600"
+          data-testid="main-file"
+          title="The file this project is built from"
+        >
+          main: {mainFile}
+        </span>
+      ) : null}
 
       <label className="ml-auto flex items-center gap-2 text-sm">
         <span className="sr-only">Build mode</span>
@@ -108,6 +134,29 @@ export function Header({
           <option value="server">{MODE_LABELS.server}</option>
         </select>
       </label>
+
+      {onBuild ? (
+        <button
+          type="button"
+          onClick={onBuild}
+          data-testid="build-button"
+          className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700"
+        >
+          Build
+        </button>
+      ) : null}
+
+      {onAutoBuildChange ? (
+        <label className="flex items-center gap-1.5 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={autoBuild}
+            onChange={(event) => onAutoBuildChange(event.target.checked)}
+            data-testid="auto-build-toggle"
+          />
+          Auto
+        </label>
+      ) : null}
 
       <button
         type="button"
@@ -153,5 +202,83 @@ export function Header({
         {stateLabel}
       </span>
     </header>
+  );
+}
+
+/**
+ * The project's title, editable in place.
+ *
+ * Clicking the title turns it into a field; Enter saves it and Escape
+ * leaves it as it was. A title that is not given a new name is not changed,
+ * so an empty edit never wipes the name.
+ */
+function EditableTitle({
+  title,
+  onRename,
+}: {
+  title: string;
+  onRename?: ((title: string) => void) | undefined;
+}): React.ReactElement {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(title);
+  const input = useRef<HTMLInputElement | null>(null);
+
+  // The field starts with the title it is editing, and the title may change
+  // under it when the project is renamed elsewhere.
+  useEffect(() => {
+    setValue(title);
+  }, [title]);
+
+  useEffect(() => {
+    if (editing) {
+      input.current?.focus();
+      input.current?.select();
+    }
+  }, [editing]);
+
+  if (!editing || !onRename) {
+    return (
+      <h1
+        className={`font-medium text-slate-900 ${onRename ? 'cursor-text hover:underline' : ''}`}
+        onClick={() => {
+          if (onRename) {
+            setEditing(true);
+          }
+        }}
+        data-testid="project-title"
+      >
+        {title}
+      </h1>
+    );
+  }
+
+  const commit = (): void => {
+    const next = value.trim();
+    setEditing(false);
+    if (next.length > 0 && next !== title) {
+      onRename(next);
+    } else {
+      setValue(title);
+    }
+  };
+
+  return (
+    <input
+      ref={input}
+      value={value}
+      onChange={(event) => setValue(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          commit();
+        } else if (event.key === 'Escape') {
+          setValue(title);
+          setEditing(false);
+        }
+      }}
+      aria-label="Project title"
+      data-testid="project-title-input"
+      className="w-64 rounded-md border border-slate-300 px-2 py-0.5 text-sm font-medium text-slate-900 outline-none focus:border-slate-500"
+    />
   );
 }

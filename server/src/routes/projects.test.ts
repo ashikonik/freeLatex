@@ -206,6 +206,98 @@ describe('PATCH /api/projects/:id', () => {
 
     expect(response.statusCode).toBe(403);
   });
+
+  it('rejects a request that changes nothing', async () => {
+    const response = await built.app.inject({
+      method: 'PATCH',
+      url: '/api/projects/prj_1',
+      headers: { authorization: `Bearer ${OWNER_KEY}` },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('sets the main file to a file that is in the project', async () => {
+    await built.app.inject({
+      method: 'PUT',
+      url: '/api/projects/prj_1/files/sigconf.tex',
+      headers: { authorization: `Bearer ${OWNER_KEY}` },
+      payload: { content: '\\documentclass{article}' },
+    });
+
+    const response = await built.app.inject({
+      method: 'PATCH',
+      url: '/api/projects/prj_1',
+      headers: { authorization: `Bearer ${OWNER_KEY}` },
+      payload: { mainFile: 'sigconf.tex' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().mainFile).toBe('sigconf.tex');
+
+    // The change is kept, so the next build uses it.
+    const row = handle.db.select().from(projects).where(eq(projects.id, 'prj_1')).get();
+    expect(row?.mainFile).toBe('sigconf.tex');
+  });
+
+  it('rejects a main file that is not in the project', async () => {
+    const response = await built.app.inject({
+      method: 'PATCH',
+      url: '/api/projects/prj_1',
+      headers: { authorization: `Bearer ${OWNER_KEY}` },
+      payload: { mainFile: 'missing.tex' },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toContain('missing.tex');
+  });
+
+  it('changes the title and the main file together', async () => {
+    await built.app.inject({
+      method: 'PUT',
+      url: '/api/projects/prj_1/files/sigconf.tex',
+      headers: { authorization: `Bearer ${OWNER_KEY}` },
+      payload: { content: '\\documentclass{article}' },
+    });
+
+    const response = await built.app.inject({
+      method: 'PATCH',
+      url: '/api/projects/prj_1',
+      headers: { authorization: `Bearer ${OWNER_KEY}` },
+      payload: { title: 'Renamed', mainFile: 'sigconf.tex' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().title).toBe('Renamed');
+    expect(response.json().mainFile).toBe('sigconf.tex');
+  });
+
+  it('refuses to change the main file with a read-only share token', async () => {
+    await built.app.inject({
+      method: 'PUT',
+      url: '/api/projects/prj_1/files/sigconf.tex',
+      headers: { authorization: `Bearer ${OWNER_KEY}` },
+      payload: { content: '\\documentclass{article}' },
+    });
+
+    const created = await built.app.inject({
+      method: 'POST',
+      url: '/api/projects/prj_1/share',
+      headers: { authorization: `Bearer ${OWNER_KEY}` },
+      payload: { permission: 'ro' },
+    });
+    const token = created.json().token;
+
+    const response = await built.app.inject({
+      method: 'PATCH',
+      url: '/api/projects/prj_1',
+      query: { token },
+      payload: { mainFile: 'sigconf.tex' },
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
 });
 
 describe('DELETE /api/projects/:id', () => {
@@ -437,6 +529,70 @@ describe('zip export and import over HTTP', () => {
     expect(body.title).toBe('Imported');
     expect(body.importedFiles).toBe(2);
     expect(body.skippedFiles).toEqual([]);
+  });
+
+  it('detects the entry point of an imported project', async () => {
+    // A project whose entry point is not called main.tex: the file that
+    // declares the document class is the one that is built.
+    await built.app.inject({
+      method: 'PUT',
+      url: '/api/projects/prj_1/files/sigconf.tex',
+      headers: { authorization: `Bearer ${OWNER_KEY}` },
+      payload: { content: '\\documentclass{article}\n\\begin{document}\\end{document}' },
+    });
+    await built.app.inject({
+      method: 'PUT',
+      url: '/api/projects/prj_1/files/fragment.tex',
+      headers: { authorization: `Bearer ${OWNER_KEY}` },
+      payload: { content: '\\section{One}' },
+    });
+
+    const exported = await built.app.inject({
+      method: 'GET',
+      url: '/api/projects/prj_1/export',
+      headers: { authorization: `Bearer ${OWNER_KEY}` },
+    });
+
+    const response = await built.app.inject({
+      method: 'POST',
+      url: '/api/projects/import',
+      headers: { authorization: `Bearer ${OWNER_KEY}` },
+      payload: { buffer: exported.rawPayload, title: 'Imported' },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().mainFile).toBe('sigconf.tex');
+  });
+
+  it('prefers main.tex over another entry point', async () => {
+    await built.app.inject({
+      method: 'PUT',
+      url: '/api/projects/prj_1/files/main.tex',
+      headers: { authorization: `Bearer ${OWNER_KEY}` },
+      payload: { content: '\\documentclass{article}' },
+    });
+    await built.app.inject({
+      method: 'PUT',
+      url: '/api/projects/prj_1/files/sigconf.tex',
+      headers: { authorization: `Bearer ${OWNER_KEY}` },
+      payload: { content: '\\documentclass{article}' },
+    });
+
+    const exported = await built.app.inject({
+      method: 'GET',
+      url: '/api/projects/prj_1/export',
+      headers: { authorization: `Bearer ${OWNER_KEY}` },
+    });
+
+    const response = await built.app.inject({
+      method: 'POST',
+      url: '/api/projects/import',
+      headers: { authorization: `Bearer ${OWNER_KEY}` },
+      payload: { buffer: exported.rawPayload, title: 'Imported' },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().mainFile).toBe('main.tex');
   });
 
   it('refuses an import with a share token', async () => {

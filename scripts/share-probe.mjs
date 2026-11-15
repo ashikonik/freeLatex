@@ -184,6 +184,55 @@ check(
   'prefix rw_',
 );
 
+// 10. The project stores a main file, and the link may change it.
+//
+// This is the reason a shared link used to fail: the link built
+// `main.tex`, which an imported project does not have. A project that
+// names its own entry point builds through the link.
+await api(`/projects/${projectId}/files/paper.tex`, {
+  method: 'PUT',
+  headers: admin,
+  body: JSON.stringify({
+    content: '\\documentclass{article}\n\\begin{document}\nHi.\n\\end{document}\n',
+  }),
+});
+const renamed = await api(`/projects/${projectId}?token=${encodeURIComponent(token)}`, {
+  method: 'PATCH',
+  body: JSON.stringify({ mainFile: 'paper.tex' }),
+});
+check(
+  'the link may set the main file of the project',
+  renamed.status === 200 && renamed.body?.mainFile === 'paper.tex',
+  `status ${renamed.status}`,
+);
+
+const badMainFile = await api(`/projects/${projectId}?token=${encodeURIComponent(token)}`, {
+  method: 'PATCH',
+  body: JSON.stringify({ mainFile: 'not-there.tex' }),
+});
+check(
+  'the link may not set a main file that is not in the project',
+  badMainFile.status === 400,
+  `status ${badMainFile.status}`,
+);
+
+// 11. The link builds the document the project names as its main file.
+const built = await api(`/projects/${projectId}/compile?token=${encodeURIComponent(token)}`, {
+  method: 'POST',
+});
+check('the link builds the main file of the project', built.status === 200, `status ${built.status}`);
+
+// 12. The link may rename the project.
+const retitled = await api(`/projects/${projectId}?token=${encodeURIComponent(token)}`, {
+  method: 'PATCH',
+  body: JSON.stringify({ title: 'Renamed through the link' }),
+});
+check(
+  'the link may rename the project',
+  retitled.status === 200 && retitled.body?.title === 'Renamed through the link',
+  `status ${retitled.status}`,
+);
+
 const failed = results.filter((result) => !result.ok);
 console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
 process.exit(failed.length === 0 ? 0 : 1);

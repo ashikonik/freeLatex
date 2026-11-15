@@ -8,8 +8,12 @@ export interface FileTreeProps {
   projectId: string;
   /** The path of the file that is currently open. */
   activePath: string | undefined;
+  /** The path of the file the project is built from. */
+  mainFile?: string;
   /** Called when a file is chosen. */
   onSelect(path: string): void;
+  /** Called when the reader makes a file the project's main file. */
+  onSetMainFile?: ((path: string) => void) | undefined;
 }
 
 /**
@@ -18,7 +22,13 @@ export interface FileTreeProps {
  * The tree is fetched when the project changes. A file that is chosen becomes
  * the active one, which the editor marks.
  */
-export function FileTree({ projectId, activePath, onSelect }: FileTreeProps): React.ReactElement {
+export function FileTree({
+  projectId,
+  activePath,
+  mainFile,
+  onSelect,
+  onSetMainFile,
+}: FileTreeProps): React.ReactElement {
   const [nodes, setNodes] = useState<FileTreeNode[]>([]);
   const [error, setError] = useState<string | undefined>(undefined);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -74,9 +84,11 @@ export function FileTree({ projectId, activePath, onSelect }: FileTreeProps): Re
             node={node}
             depth={0}
             activePath={activePath}
+            mainFile={mainFile}
             expanded={expanded}
             onToggle={toggle}
             onSelect={onSelect}
+            onSetMainFile={onSetMainFile}
           />
         ))}
       </ul>
@@ -89,9 +101,11 @@ interface TreeNodeProps {
   node: FileTreeNode;
   depth: number;
   activePath: string | undefined;
+  mainFile: string | undefined;
   expanded: Set<string>;
   onToggle(path: string): void;
   onSelect(path: string): void;
+  onSetMainFile?: ((path: string) => void) | undefined;
 }
 
 /** Render one node and, for a directory, its children. */
@@ -99,13 +113,16 @@ function TreeNode({
   node,
   depth,
   activePath,
+  mainFile,
   expanded,
   onToggle,
   onSelect,
+  onSetMainFile,
 }: TreeNodeProps): React.ReactElement {
   const isDirectory = node.type === 'directory';
   const isOpen = expanded.has(node.path);
   const isActive = activePath === node.path;
+  const isMain = mainFile === node.path;
   const indent = { paddingLeft: `${depth * 12 + 8}px` };
 
   if (isDirectory) {
@@ -131,9 +148,11 @@ function TreeNode({
                 node={child}
                 depth={depth + 1}
                 activePath={activePath}
+                mainFile={mainFile}
                 expanded={expanded}
                 onToggle={onToggle}
                 onSelect={onSelect}
+                onSetMainFile={onSetMainFile}
               />
             ))}
           </ul>
@@ -143,18 +162,32 @@ function TreeNode({
   }
 
   return (
-    <li>
+    <li className="group flex items-center gap-1">
       <button
         type="button"
         onClick={() => onSelect(node.path)}
         style={indent}
         aria-current={isActive ? 'true' : undefined}
-        className={`block w-full truncate rounded py-1 pr-2 text-left text-sm hover:bg-slate-100 ${
+        className={`block min-w-0 flex-1 truncate rounded py-1 pr-2 text-left text-sm hover:bg-slate-100 ${
           isActive ? 'bg-slate-200 font-medium text-slate-900' : 'text-slate-700'
         }`}
       >
         {node.name}
       </button>
+      {onSetMainFile ? (
+        <button
+          type="button"
+          onClick={() => onSetMainFile(node.path)}
+          title={
+            isMain ? 'This is already the main file' : 'Build this file as the main file'
+          }
+          disabled={isMain}
+          data-testid={`set-main-file-${node.path}`}
+          className="mr-1 rounded px-1 text-xs text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-40"
+        >
+          {isMain ? '★' : '☆'}
+        </button>
+      ) : null}
     </li>
   );
 }

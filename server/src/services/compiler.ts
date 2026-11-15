@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { cpus, tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 import { assertRealPathWithin, resolveWithin } from './paths.js';
 
@@ -56,7 +56,23 @@ export type CompileFailureReason =
   | 'timeout'
   | 'main-file-missing'
   | 'no-output'
-  | 'spawn-failed';
+  | 'spawn-failed'
+  | 'biber-not-found';
+
+/**
+ * Raised when a document needs biber and biber is not installed.
+ *
+ * A biblatex document cannot be built by tectonic's built-in BibTeX, so
+ * the server has to run biber itself. When biber is missing the reader
+ * needs to be told what to install rather than left with a TeX error about
+ * a file that was never written.
+ */
+export class BiberNotFoundError extends Error {
+  constructor(message = 'This document needs biber, which is not installed on this server.') {
+    super(message);
+    this.name = 'BiberNotFoundError';
+  }
+}
 
 /**
  * Raised when the compilation exceeded its time budget.
@@ -93,6 +109,8 @@ export interface CompilerOptions {
   timeoutMs: number;
   /** Override the tectonic executable (used by tests). */
   binaryPath?: string;
+  /** Override the biber executable (used by tests). */
+  biberPath?: string;
 }
 
 /**
@@ -166,6 +184,155 @@ async function isExecutable(path: string): Promise<boolean> {
 }
 
 /**
+ * The name of the biber executable.
+ */
+const BIBER_BINARY = 'biber';
+
+/**
+ * Locations to search for the biber binary when it is not on the PATH.
+ *
+ * The order matches the tectonic search: the usual system directories
+ * first, then the PATH itself.
+ */
+const BIBER_FALLBACK_PATHS = [
+  '/usr/local/bin/biber',
+  '/usr/bin/biber',
+  '/usr/local/share/perl5/biber',
+];
+
+/**
+ * Find the biber executable.
+ *
+ * Biber is a Perl program, so it is an interpreter and a module tree rather
+ * than a single file. The `BIBER_BINARY` override names the executable to
+ * run; the fallback list holds the usual install locations.
+ *
+ * @param override An explicit path to use in place of the environment
+ * variable. An empty string means "there is no biber", which is how a
+ * caller asks for the missing-biber answer without uninstalling it.
+ * @returns The absolute path of the binary, or undefined when it is not
+ * installed.
+ */
+export async function resolveBiberBinary(override?: string): Promise<string | undefined> {
+  // An explicit override wins, so tests can point at a stub.
+  const configured = override ?? process.env.BIBER_BINARY;
+  if (configured === '') {
+    return undefined;
+  }
+  if (configured && (await isExecutable(configured))) {
+    return configured;
+  }
+
+  for (const candidate of BIBER_FALLBACK_PATHS) {
+    if (await isExecutable(candidate)) {
+      return candidate;
+    }
+  }
+
+  // Fall back to a PATH lookup: spawning a bare name lets the OS resolve it.
+  const pathDirs = (process.env.PATH ?? '').split(':').filter(Boolean);
+  for (const dir of pathDirs) {
+    const candidate = join(dir, BIBER_BINARY);
+    if (await isExecutable(candidate)) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Build the PATH the compiler process runs with.
+ *
+ * Tectonic invokes biber by its bare name, so the compiler can only find
+ * it when biber's directory is on the PATH. When the biber binary lives
+ * somewhere else — a test stub, or an install in a directory the server's
+ * own PATH does not list — that directory is put in front.
+ *
+ * @param biberBinary The biber executable, when there is one.
+ * @returns The PATH for the compiler process.
+ */
+function pathWithBiber(biberBinary: string | undefined): string {
+  const current = process.env.PATH ?? '';
+  if (!biberBinary) {
+    return current;
+  }
+
+  const directory = dirname(biberBinary);
+  const dirs = current.split(':').filter(Boolean);
+  if (dirs.includes(directory)) {
+    return current;
+  }
+
+  return [directory, ...dirs].join(':');
+}
+
+/**
+ * True when the project's sources ask for biblatex.
+ *
+ * A biblatex document uses `\addbibresource` and `\printbibliography`; a
+ * classic one uses `\bibliography` and `\bibliographystyle`. The two need
+ * different bibliography engines, and only the classic one is built into
+ * tectonic.
+ *
+ * The check reads the main file and the files it includes, because the
+ * commands are often split across them: the preamble may add the resource
+ * and the body may print the bibliography.
+ */
+export async function needsBiber(projectDir: string, mainFile: string): Promise<boolean> {
+  const sources = await collectSources(projectDir, mainFile);
+  return sources.some((source) => /\\(addbibresource|printbibliography)\b/.test(source));
+}
+
+/**
+ * Read the main file and the files it includes.
+ *
+ * The include list is followed one level deep, which covers the usual
+ * layout of a project: a main file, a preamble and a body. A file that
+ * cannot be read is skipped rather than failing the check — the compiler
+ * will report the real problem.
+ */
+async function collectSources(projectDir: string, mainFile: string): Promise<string[]> {
+  const read = async (path: string): Promise<string | undefined> => {
+    try {
+      const resolved = resolveWithin(projectDir, path);
+      await assertRealPathWithin(projectDir, resolved);
+      return await readFile(resolved, 'utf8');
+    } catch {
+      return undefined;
+    }
+  };
+
+  const main = await read(mainFile);
+  if (main === undefined) {
+    return [];
+  }
+
+  const sources = [main];
+  const included = new Set<string>();
+
+  for (const match of main.matchAll(/\\(?:input|include)\s*\{([^}]+)\}/g)) {
+    const target = match[1];
+    if (target === undefined || included.has(target)) {
+      continue;
+    }
+    included.add(target);
+    // TeX adds the extension itself when the name has none, so the file
+    // on disk is `preamble.tex` even though the source says `preamble`.
+    const candidates = target.toLowerCase().endsWith('.tex') ? [target] : [target, `${target}.tex`];
+    for (const candidate of candidates) {
+      const content = await read(candidate);
+      if (content !== undefined) {
+        sources.push(content);
+        break;
+      }
+    }
+  }
+
+  return sources;
+}
+
+/**
  * Compile a LaTeX project with tectonic.
  *
  * The compiler runs in a scratch directory so that the intermediate files it
@@ -197,6 +364,17 @@ export async function compileProject(options: CompilerOptions): Promise<CompileR
   const workDir = await mkdtemp(join(tmpdir(), 'freelatex-build-'));
 
   try {
+    // A biblatex document needs biber. Tectonic runs it by itself — it
+    // writes the control file, invokes biber and reruns the engine — but
+    // the biber program has to be installed on the PATH. The check comes
+    // first so that a missing biber is reported as a missing biber rather
+    // than as a TeX error about a file that was never written.
+    const biblatex = await needsBiber(options.projectDir, mainFile);
+    const biberBinary = biblatex ? await resolveBiberBinary(options.biberPath) : undefined;
+    if (biblatex && !biberBinary) {
+      throw new BiberNotFoundError();
+    }
+
     const args = [
       '-X',
       'compile',
@@ -210,16 +388,33 @@ export async function compileProject(options: CompilerOptions): Promise<CompileR
       workDir,
     ];
 
-    const result = await runTectonic(binary, args, options.projectDir, options.timeoutMs);
+    const result = await runTectonic(
+      binary,
+      args,
+      options.projectDir,
+      options.timeoutMs,
+      pathWithBiber(biberBinary),
+    );
 
     const log = result.stdout + result.stderr;
-    const errors = parseCompilerErrors(log);
+    let errors = parseCompilerErrors(log);
 
     // A build that overran its budget is raised rather than returned: the
     // caller has to tell "took too long" from "did not compile", and the two
     // need different answers.
     if (result.timedOut) {
       throw new CompileTimeoutError(options.timeoutMs);
+    }
+
+    // Biber reports its own diagnostics, and tectonic passes them through
+    // in a form of its own. A biblatex build that failed is far easier to
+    // understand with biber's messages included, so they are recognised
+    // too.
+    if (biblatex) {
+      const biberErrors = parseBiberErrors(log);
+      if (biberErrors.length > 0) {
+        errors = [...errors, ...biberErrors];
+      }
     }
 
     // A non-zero exit is only a failure when no PDF was produced: tectonic
@@ -249,6 +444,49 @@ export async function compileProject(options: CompilerOptions): Promise<CompileR
   } finally {
     await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+/**
+ * Extract the diagnostics from biber's output.
+ *
+ * Biber reports its errors in its own format:
+ *
+ *     ERROR - Error at line 63 of file sample-base.bib:
+ *     Illegal character in name
+ *
+ * so the file and the line are taken from the header rather than from the
+ * message itself.
+ */
+export function parseBiberErrors(output: string): CompileError[] {
+  const errors: CompileError[] = [];
+
+  for (const line of output.split('\n')) {
+    const trimmed = line.trim();
+
+    const header = /^(ERROR|WARN)\s*-\s*(?:Error|Warning)\s+at\s+line\s+(\d+)\s+of\s+file\s+(.+?):?$/.exec(
+      trimmed,
+    );
+    if (header) {
+      errors.push({
+        severity: header[1] === 'WARN' ? 'warning' : 'error',
+        message: trimmed,
+        file: header[3] ?? undefined,
+        line: Number(header[2]),
+      });
+      continue;
+    }
+
+    // The summary line biber prints at the end of a failed run.
+    if (/^(ERROR|FATAL)\s*-\s*(.+)$/.test(trimmed)) {
+      const match = /^(ERROR|FATAL)\s*-\s*(.+)$/.exec(trimmed);
+      errors.push({
+        severity: 'error',
+        message: match?.[2] ?? trimmed,
+      });
+    }
+  }
+
+  return errors;
 }
 
 /** The result of one compiler process. */
@@ -345,12 +583,13 @@ async function runTectonic(
   args: string[],
   cwd: string,
   timeoutMs: number,
+  path?: string,
 ): Promise<ProcessResult> {
   // The slot is taken before the process starts and given back when it ends,
   // however it ends.
   const release = await acquireCompilationSlot();
   try {
-    return await startProcess(binary, args, cwd, timeoutMs);
+    return await startProcess(binary, args, cwd, timeoutMs, path);
   } finally {
     release();
   }
@@ -364,13 +603,19 @@ function startProcess(
   args: string[],
   cwd: string,
   timeoutMs: number,
+  path?: string,
 ): Promise<ProcessResult> {
   return new Promise<ProcessResult>((resolve, reject) => {
+    const env = process.env;
+    // The compiler process needs a PATH that holds biber, so that tectonic
+    // can find it when the document asks for biblatex.
+    const childEnv = path === undefined ? env : { ...env, PATH: path };
+
     const child = spawn(binary, args, {
       cwd,
       // A LaTeX run must not be able to prompt for input.
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: process.env,
+      env: childEnv,
     });
 
     let stdout = '';
@@ -479,6 +724,18 @@ export function parseCompilerErrors(output: string): CompileError[] {
         message: summary[3] ?? '',
         file: summary[1] ?? undefined,
         line: Number(summary[2]),
+      });
+      continue;
+    }
+
+    // Tectonic's "a file is missing" form: "error: can't open path `x.bib'".
+    // The file is named but has no line, so the position stays empty.
+    const missing = /^error:\s+can't open path\s+`(.+)'$/.exec(trimmed);
+    if (missing) {
+      errors.push({
+        severity: 'error',
+        message: `The file "${missing[1]}" could not be opened.`,
+        file: missing[1] ?? undefined,
       });
       continue;
     }

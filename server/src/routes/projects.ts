@@ -125,7 +125,14 @@ export async function projectRoutes(
     });
   });
 
-  /** Rename a project. */
+  /**
+   * Change a project's title or its main file.
+   *
+   * Either field may be changed on its own, and a request that carries
+   * neither is rejected. The main file must exist inside the project: a
+   * build of a file that is not there would fail for the reader with a
+   * message that says nothing about the cause.
+   */
   app.patch('/api/projects/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
     const identity = request.identity;
@@ -138,19 +145,39 @@ export async function projectRoutes(
       return reply.status(decision.statusCode).send({ error: decision.message });
     }
 
-    const body = (request.body ?? {}) as { title?: string };
+    const body = (request.body ?? {}) as { title?: string; mainFile?: string };
     const title = body.title?.trim();
-    if (!title) {
-      return reply.status(400).send({ error: 'title is required.' });
+    const mainFile = body.mainFile?.trim();
+
+    if (!title && !mainFile) {
+      return reply.status(400).send({ error: 'title or mainFile is required.' });
     }
 
-    context.db
-      .update(projects)
-      .set({ title, updatedAt: new Date() })
-      .where(eq(projects.id, id))
-      .run();
+    const changes: { title?: string; mainFile?: string; updatedAt: Date } = {
+      updatedAt: new Date(),
+    };
 
-    return reply.send({ id, title });
+    if (title) {
+      changes.title = title;
+    }
+
+    if (mainFile) {
+      if (!(await storage.exists(id, mainFile))) {
+        return reply
+          .status(400)
+          .send({ error: `There is no file named "${mainFile}" in this project.` });
+      }
+      changes.mainFile = mainFile;
+    }
+
+    context.db.update(projects).set(changes).where(eq(projects.id, id)).run();
+
+    const row = context.db.select().from(projects).where(eq(projects.id, id)).get();
+    return reply.send({
+      id,
+      title: row?.title ?? title,
+      mainFile: row?.mainFile ?? mainFile,
+    });
   });
 
   /** Delete a project and its files. */
@@ -343,21 +370,69 @@ export async function projectRoutes(
 
     const result = await storage.importZip(id, archive);
 
+    // The entry point of an imported archive is not known in advance: an
+    // ACM sample builds `sigconf.tex`, a thesis builds `main.tex`, and a
+    // hardcoded name would break every project that is not named the same
+    // way. So it is looked for in the files that were just imported.
+    const mainFile = await detectMainFile(storage, id);
+
     context.db
       .insert(projects)
-      .values({ id, ownerId, title: finalTitle, mainFile: 'main.tex' })
+      .values({ id, ownerId, title: finalTitle, mainFile })
       .run();
 
     return reply.status(201).send({
       id,
       title: finalTitle,
-      mainFile: 'main.tex',
+      mainFile,
       ownerId,
       importedFiles: result.files,
       skippedFiles: result.skipped,
       skippedCount: result.skippedCount,
     });
   });
+}
+
+/**
+ * Find the file an imported project is built from.
+ *
+ * The search is in two steps, because the two names mean different things:
+ *
+ * - `main.tex` is the conventional name, so a project that has one is
+ *   built from it whatever else it contains.
+ * - otherwise the file that declares `\documentclass` is the entry point —
+ *   that is what makes a LaTeX file a document rather than an included
+ *   fragment.
+ *
+ * A project with neither has no entry point that can be found, so the
+ * conventional name is kept: the build then fails with "no such file",
+ * which the reader can fix by setting the main file.
+ */
+async function detectMainFile(storage: ProjectStorage, projectId: string): Promise<string> {
+  const entries = await storage.listProjectFiles(projectId);
+  const texFiles = entries
+    .filter((entry) => entry.type === 'file' && entry.path.toLowerCase().endsWith('.tex'))
+    .map((entry) => entry.path);
+
+  if (texFiles.length === 0) {
+    return 'main.tex';
+  }
+
+  const conventional = texFiles.find((path) => path.toLowerCase() === 'main.tex');
+  if (conventional) {
+    return conventional;
+  }
+
+  // The document class is declared near the top of the file, so the first
+  // few kilobytes are enough to find it and a large file is not read whole.
+  for (const path of texFiles) {
+    const content = await storage.readProjectFile(projectId, path).catch(() => '');
+    if (/\\documentclass/.test(content.slice(0, 8192))) {
+      return path;
+    }
+  }
+
+  return 'main.tex';
 }
 
 /**

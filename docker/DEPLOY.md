@@ -5,6 +5,57 @@ LaTeX compiler all live in the same image, and the server hands out the
 client's files itself. A browser therefore talks to a single origin, and no
 cross-origin rules or cookie handling are involved.
 
+## Share from your own PC
+
+A share link does not need a cloud service to work. The link is a URL, and
+any URL that a co-editor's browser can reach will do — including one that
+points at your own machine over the public internet.
+
+The tunnel is [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/),
+which offers a *quick tunnel*: no account, no card, no configuration. It
+gives a public HTTPS address that forwards to a port on your machine.
+
+```sh
+# 1. The server, with the client attached.
+#
+#    STATIC_DIR is what makes the deep link work. Without it the server has
+#    no client to hand out, and /p/{id} answers 404 instead of the
+#    application.
+PORT=3030 \
+STATIC_DIR=client/dist \
+  npm run dev:server
+
+# 2. The tunnel, in another terminal.
+cloudflared tunnel --url http://127.0.0.1:3030
+```
+
+The tunnel prints a public address:
+
+```
+https://approaches-scholars-clan-tion.trycloudflare.com
+```
+
+Open the application at that address, mint a share link from the project's
+**Share** menu, and send the link. The co-editor opens it and works in the
+same document, live.
+
+Three things to know about this arrangement:
+
+- **The address changes every time you restart the tunnel.** A link minted
+  against the old address stops working. Mint the share link after the
+  tunnel is up, and share the new link.
+- **The tunnel lives as long as the process.** When your machine sleeps, or
+  you close the terminal, the address stops answering. The Oracle
+  deployment below has neither problem, which is why it is the better home
+  for a document you care about.
+- **Your machine is the server.** The compiler runs on your hardware, and
+  anything the co-editor writes lands in your database. That is the point,
+  but it also means your machine has to stay awake for as long as they are
+  working.
+
+`npm run share:public` does the first two steps together — it builds the
+client, starts the server with `STATIC_DIR` set, and opens the tunnel.
+
 ## What a free tier has to provide
 
 Most free tiers cannot run this application, and the reason is almost always
@@ -15,8 +66,10 @@ the same one. Two things are needed:
 | **WebSocket support** | The collaborative editor's socket lives at `/ws/{room}`. Without it the editor falls back to polling: no live cursors, no shared document, and the co-editors do not really co-edit. |
 | **A persistent disk** | The SQLite database and the projects' files live in `/app/data`. On a tier whose filesystem is wiped on every deploy, every document the owner writes disappears. |
 
-Add to that a container that can hold a 566 MB image and a TeX engine that
+Add to that a container that can hold a 775 MB image and a TeX engine that
 wants about 190 MB of memory while it compiles, and the field narrows quickly.
+(The 775 MB figure is the image without the in-browser preview. With it the
+image is 2.03 GB; without the bibliography engine it is 623 MB.)
 
 | Service | WebSockets | Persistent disk | Verdict |
 | --- | --- | --- | --- |
@@ -103,7 +156,41 @@ in-browser preview is wanted and there is disk to spare.
 The key that was generated is the owner's credential — keep it, and do not
 put it in the repository.
 
-### 5. Put TLS in front
+### 5. The bibliography engine
+
+The image carries `biber`, the engine that builds the bibliography of a
+`biblatex` document. Tectonic runs it by itself: it writes the control file,
+calls the program and reruns the engine. Without it, a `biblatex` document
+is refused with a message that says what is missing rather than with a TeX
+error.
+
+Two build flags control it:
+
+| Flag | Effect |
+| --- | --- |
+| `WITH_BIBER=true` (the default) | The engine is in the image, and `biblatex` documents build. |
+| `WITH_BIBER=false` | The engine is left out, and the image is 152 MB smaller. Classic BibTeX documents still build. |
+
+The version is not a free choice, and this is worth knowing before the
+engine is ever replaced by hand. Biber compares the version of the control
+file against its own with **string equality**, not "at least". Tectonic's
+bundle is frozen at TeX Live 2022, which carries `biblatex` 3.17 and writes a
+control file of version 3.8 — and the only biber that accepts version 3.8
+is biber **2.17**. The distributions ship other versions: Debian has 2.18
+(bookworm) and 2.20 (trixie), Ubuntu has 2.17. A `biber` from the package
+manager and a biber that works are therefore different things.
+
+The image installs upstream's own Linux binary, which carries its libraries
+with it, so the runtime image needs no Perl. `docker/Dockerfile` explains the
+choice in full.
+
+The build proves the pairing. `docker/biblatex-check.sh` compiles a
+`biblatex` document with the very tools the image ships, and
+`scripts/biber-probe.mjs` does the same through the server's own code. Both
+run while the image is built, so an image that cannot build a `biblatex`
+document never leaves the builder.
+
+### 6. Put TLS in front
 
 The editor is served over the internet, so it needs HTTPS. Caddy obtains and
 renews the certificate on its own:
@@ -121,7 +208,7 @@ sudo systemctl enable --now caddy
 The domain has to point at the instance's public IP. If it does not, the
 certificate will not be issued and the proxy will not start.
 
-### 6. Open the firewall
+### 7. Open the firewall
 
 Oracle's default security list allows SSH only. **Networking → Virtual Cloud
 Networks → VCN → Security Lists → Add Ingress Rules** for TCP 80 and 443
