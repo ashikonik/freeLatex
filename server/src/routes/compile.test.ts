@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { buildApp, type BuiltApp } from '../app.js';
+import { eq } from 'drizzle-orm';
 import { openDatabase, type DbHandle } from '../db/index.js';
 import { projects, users } from '../db/schema.js';
 import { hashSecret } from '../utils/hash.js';
@@ -182,6 +183,54 @@ describe('POST /api/projects/:id/compile', () => {
     expect(response.statusCode).toBe(404);
   });
 
+  it('builds the file the project stores as its main file', async () => {
+    if (!(await tectonicAvailable())) {
+      return;
+    }
+    // The project's main file is not main.tex, which is what an imported
+    // ACM sample looks like.
+    await writeFile('sigconf.tex', VALID_DOCUMENT);
+    handle.db
+      .update(projects)
+      .set({ mainFile: 'sigconf.tex' })
+      .where(eq(projects.id, 'prj_1'))
+      .run();
+
+    const response = await built.app.inject({
+      method: 'POST',
+      url: '/api/projects/prj_1/compile',
+      headers: { authorization: `Bearer ${OWNER_KEY}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.rawPayload.subarray(0, 5).toString('ascii')).toBe('%PDF-');
+  }, COMPILE_TEST_TIMEOUT);
+
+  it('reports a clear error when the main file is not in the project', async () => {
+    const response = await built.app.inject({
+      method: 'POST',
+      url: '/api/projects/prj_1/compile',
+      headers: { authorization: `Bearer ${OWNER_KEY}` },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toContain('main.tex');
+  });
+
+  it('rejects a main file that is not in the project', async () => {
+    await writeFile('main.tex', VALID_DOCUMENT);
+
+    const response = await built.app.inject({
+      method: 'POST',
+      url: '/api/projects/prj_1/compile',
+      headers: { authorization: `Bearer ${OWNER_KEY}` },
+      payload: { mainFile: 'missing.tex' },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toContain('missing.tex');
+  });
+
   it('does not let one user read another user\'s build metadata', async () => {
     const response = await built.app.inject({
       method: 'GET',
@@ -295,6 +344,40 @@ describe('POST /api/projects/:id/compile', () => {
 
     expect(response.statusCode).toBe(403);
   });
+
+  it('says what is missing when a biblatex document needs biber', async () => {
+    if (!(await tectonicAvailable())) {
+      return;
+    }
+    await writeFile(
+      'main.tex',
+      '\\documentclass{article}\n\\usepackage[backend=biber]{biblatex}\n\\addbibresource{refs.bib}\n\\begin{document}\nHi.\n\\printbibliography\n\\end{document}\n',
+    );
+
+    // An empty override means "there is no biber on this server", which is
+    // the situation the answer has to explain.
+    const previous = process.env.BIBER_BINARY;
+    process.env.BIBER_BINARY = '';
+    try {
+      const response = await built.app.inject({
+        method: 'POST',
+        url: '/api/projects/prj_1/compile',
+        headers: { authorization: `Bearer ${OWNER_KEY}` },
+      });
+
+      // 503: the request was fine, but the server cannot serve it.
+      expect(response.statusCode).toBe(503);
+      const body = response.json();
+      expect(body.error).toContain('biber');
+      expect(body.failureReason).toBe('biber-not-found');
+    } finally {
+      if (previous === undefined) {
+        delete process.env.BIBER_BINARY;
+      } else {
+        process.env.BIBER_BINARY = previous;
+      }
+    }
+  }, COMPILE_TEST_TIMEOUT);
 });
 
 describe('SyncTeX endpoints', () => {

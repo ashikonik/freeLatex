@@ -100,19 +100,62 @@ RUN case "$TARGETARCH" in \
 #
 # The bundle is written into the image's own cache directory, and the runtime
 # stage starts from that copy.
+#
+# Two documents are warmed, not one. The plain article covers the common
+# case; the biblatex one pulls in the bibliography package and the fonts it
+# wants, so that a container serving a biblatex document does not have to
+# reach the network for them on its first build.
 RUN mkdir -p /tectonic-cache && \
     printf '\\documentclass{article}\n\\begin{document}\nWarm the cache.\n\\end{document}\n' > /tmp/warm.tex && \
     XDG_CACHE_HOME=/tectonic-cache tectonic -X compile /tmp/warm.tex --outfmt pdf --outdir /tmp && \
     rm -f /tmp/warm.tex /tmp/warm.pdf \
   && test -d /tectonic-cache/Tectonic
 
+# ---------------------------------------------------------------- biber
+#
+# Biber is the bibliography engine for biblatex documents. Tectonic runs it
+# by itself: it writes the control file, invokes the program and reruns the
+# engine. All the server has to do is make sure biber is on the PATH.
+#
+# The version is not a free choice. Biber compares the version of the
+# control file against its own with string equality — not "at least" — and
+# refuses to run when they differ. Tectonic's bundle is frozen at TeX Live
+# 2022, which carries biblatex 3.17 and writes a control file of version
+# 3.8. The only biber that accepts version 3.8 is biber 2.17.
+#
+# The distributions do not ship it: Debian has 2.18 (bookworm) and 2.20
+# (trixie), Ubuntu has 2.17 (jammy), and both are Perl programs that drag
+# in about thirty Perl modules. Upstream also builds a self-contained
+# Linux binary that carries its own libraries, so the image needs neither
+# Perl nor the modules — only the binary.
+FROM debian:bookworm-slim AS biber
+
+ARG BIBER_VERSION=2.17
+ARG BIBER_URL=https://sourceforge.net/projects/biblatex-biber/files/biblatex-biber/2.17/binaries/Linux/biber-linux_x86_64.tar.gz
+
+RUN apt-get update \
+  && apt-get install --no-install-recommends -y ca-certificates curl \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL "$BIBER_URL" -o /tmp/biber.tar.gz \
+  && tar -xzf /tmp/biber.tar.gz -C /tmp \
+  && install -m 0755 /tmp/biber /usr/local/bin/biber \
+  && rm -rf /tmp/biber /tmp/biber.tar.gz \
+  && biber --version
+
 # ---------------------------------------------------------------- runtime
 FROM node:22-bookworm-slim AS runtime
 
 # The runtime needs the certificates to reach the model providers and to
 # fetch a project's packages, and the font configuration the compiler reads
-# when it embeds a font in the document. Nothing else: the compiler is a
-# static binary and the server needs no shared library beyond libc.
+# when it embeds a font in the document. Nothing else: the compiler and the
+# bibliography engine are both self-contained binaries, and the server
+# needs no shared library beyond libc.
+#
+# Biber is opt-in. A deployment that only builds classic BibTeX documents
+# does not need it, and can leave it out with `--build-arg WITH_BIBER=false`.
+ARG WITH_BIBER=true
+
 RUN apt-get update \
   && apt-get install --no-install-recommends -y ca-certificates fontconfig \
   && rm -rf /var/lib/apt/lists/*
@@ -121,6 +164,13 @@ RUN apt-get update \
 # a document should not be able to write anywhere it likes.
 RUN groupadd --system --gid 1001 freelatex \
   && useradd --system --uid 1001 --gid freelatex --create-home --home-dir /home/freelatex freelatex
+
+ENV NODE_ENV=production \
+    PORT=3030 \
+    HOST=0.0.0.0 \
+    DATA_DIR=/app/data \
+    STATIC_DIR=/app/public \
+    XDG_CACHE_HOME=/home/freelatex/.cache
 
 WORKDIR /app
 
@@ -134,22 +184,36 @@ COPY --from=server --chown=freelatex:freelatex /build/server/dist ./dist
 COPY --from=client --chown=freelatex:freelatex /build/client/dist ./public
 COPY --from=tectonic /usr/local/bin/tectonic /usr/local/bin/tectonic
 
+# The bibliography engine is copied in rather than installed here: the one
+# that pairs with the compiler's biblatex is a specific version, and it is
+# built in its own stage so that the runtime image carries no Perl.
+COPY --from=biber /usr/local/bin/biber /usr/local/bin/biber
+
 # The compiler's format bundle was fetched while the image was built. The
 # runtime stage starts from that copy, so a document compiles at once.
 COPY --from=tectonic --chown=freelatex:freelatex /tectonic-cache /home/freelatex/.cache
 
-# The project's files and the database live in a volume, so that the data
-# survives a new image.
+# The biblatex path is checked while the image is built: a document that
+# asks for biber is compiled with the very tools the image ships. A build
+# that cannot do that fails here rather than in a reader's document.
+#
+# Two checks, because there are two halves. The shell check proves that the
+# compiler and the engine fit together; the probe proves that the server
+# finds the engine and gets a document with a bibliography out of it.
+#
+# The checks run as the application user, against the very cache the
+# server will use. Anything the compiler downloads while they run — the
+# bibliography package and the fonts it wants — is therefore already in
+# the cache the server starts from, and already owned by the user that
+# will read it.
+COPY docker/biblatex-check.sh /usr/local/bin/biblatex-check
+COPY scripts/biber-probe.mjs /usr/local/bin/biber-probe
 RUN mkdir -p /app/data && chown freelatex:freelatex /app/data
-
 USER freelatex
-
-ENV NODE_ENV=production \
-    PORT=3030 \
-    HOST=0.0.0.0 \
-    DATA_DIR=/app/data \
-    STATIC_DIR=/app/public \
-    XDG_CACHE_HOME=/home/freelatex/.cache
+RUN if [ "$WITH_BIBER" = "true" ]; then \
+      /usr/local/bin/biblatex-check \
+      && node /usr/local/bin/biber-probe /app/dist; \
+    fi
 
 EXPOSE 3030
 

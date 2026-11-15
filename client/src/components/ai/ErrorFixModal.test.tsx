@@ -8,7 +8,14 @@ const askAi = vi.hoisted(() => vi.fn());
 
 vi.mock('../../lib/api.js', () => ({ askAi }));
 
-const ERRORS = ['main.tex:12: Undefined control sequence.'];
+const ERRORS = [
+  {
+    severity: 'error' as const,
+    message: 'Undefined control sequence.',
+    file: 'main.tex',
+    line: 12,
+  },
+];
 const SOURCE = '\\section{One}\n\\undefinedcommand';
 
 beforeEach(() => {
@@ -62,7 +69,8 @@ describe('the one-click error fix', () => {
     expect(provider).toBe('openai');
     expect(key).toBe('sk-test');
     expect(body.source).toBe(SOURCE);
-    expect(body.errors).toEqual(ERRORS);
+    // The diagnostics are sent as text, each naming where it was found.
+    expect(body.errors).toEqual(['main.tex:12: Undefined control sequence.']);
   });
 
   it('shows the corrected document before it is applied', async () => {

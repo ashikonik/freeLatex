@@ -12,7 +12,14 @@ import { Header, type BuildMode } from '../components/layout/Header.js';
 import { SplitPane } from '../components/layout/SplitPane.js';
 import { ShareModal } from '../components/share/ShareModal.js';
 import { PreviewPanel } from '../components/viewer/PreviewPanel.js';
-import { listFiles, readFile, type Project } from '../lib/api.js';
+import {
+  listFiles,
+  readFile,
+  renameProject,
+  setProjectMainFile,
+  type CompileError,
+  type Project,
+} from '../lib/api.js';
 import { readActiveShareToken } from '../lib/share-link.js';
 import { useAuth } from '../context/AuthContext.js';
 
@@ -22,6 +29,8 @@ export interface WorkspacePageProps {
   project: Project;
   /** Called when the user leaves the workspace. */
   onBack(): void;
+  /** Called when the project's title or main file changes. */
+  onProjectChange?: (project: Project) => void;
 }
 
 /**
@@ -32,9 +41,26 @@ export interface WorkspacePageProps {
  * document and its own room, so two people editing different files do not
  * hold each other up.
  */
-export function WorkspacePage({ project, onBack }: WorkspacePageProps): React.ReactElement {
+export function WorkspacePage({
+  project,
+  onBack,
+  onProjectChange,
+}: WorkspacePageProps): React.ReactElement {
   const { identity } = useAuth();
+  const [title, setTitle] = useState(project.title);
+  const [mainFile, setMainFile] = useState(project.mainFile);
   const [activePath, setActivePath] = useState<string | undefined>(project.mainFile);
+
+  // The project the workspace shows may change under it — the header's
+  // rename writes the title back to the application, which hands the new
+  // project down. The local state follows so the two never disagree.
+  useEffect(() => {
+    setTitle(project.title);
+  }, [project.title]);
+
+  useEffect(() => {
+    setMainFile(project.mainFile);
+  }, [project.mainFile]);
   const [doc, setDoc] = useState<Y.Doc | undefined>(undefined);
   const [awareness, setAwareness] = useState<Awareness | undefined>(undefined);
   const [status, setStatus] = useState<'connecting' | 'connected' | 'offline'>('connecting');
@@ -52,7 +78,11 @@ export function WorkspacePage({ project, onBack }: WorkspacePageProps): React.Re
   const [historyOpen, setHistoryOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [fixOpen, setFixOpen] = useState(false);
-  const [errors, setErrors] = useState<string[]>([]);
+  const [errors, setErrors] = useState<CompileError[]>([]);
+  /** Whether the document is rebuilt whenever it changes. */
+  const [autoBuild, setAutoBuild] = useState(true);
+  /** The counter of the reader's build requests. */
+  const [buildRequest, setBuildRequest] = useState(0);
 
   // The document and the provider are torn down when the file changes, so
   // the previous file's socket does not linger.
@@ -178,6 +208,46 @@ export function WorkspacePage({ project, onBack }: WorkspacePageProps): React.Re
   }, []);
 
   /**
+   * Rename the project.
+   *
+   * The title is changed on the server first, so the name in the header is
+   * the name the server holds. A share token cannot rename the project, and
+   * the server refuses the attempt; the error is shown rather than swallowed.
+   */
+  const onRename = useCallback(
+    async (next: string): Promise<void> => {
+      try {
+        await renameProject(project.id, next);
+        setTitle(next);
+        onProjectChange?.({ ...project, title: next });
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : 'The project could not be renamed.');
+      }
+    },
+    [project, onProjectChange],
+  );
+
+  /**
+   * Set the file the project is built from.
+   *
+   * The change is kept on the server so that every reader of the project
+   * builds the same document — a co-editor who joins through a share link
+   * sees the preview the owner sees.
+   */
+  const onSetMainFile = useCallback(
+    async (path: string): Promise<void> => {
+      try {
+        await setProjectMainFile(project.id, path);
+        setMainFile(path);
+        onProjectChange?.({ ...project, mainFile: path });
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : 'The main file could not be set.');
+      }
+    },
+    [project, onProjectChange],
+  );
+
+  /**
    * The project was restored to an older revision.
    *
    * The files on the server have changed, so the open file has to be read
@@ -240,20 +310,33 @@ export function WorkspacePage({ project, onBack }: WorkspacePageProps): React.Re
           cursorLine={cursorLine}
           onJumpToSource={onJumpToSource}
           onErrors={setErrors}
+          autoBuild={autoBuild}
+          buildRequest={buildRequest}
         />
       ) : (
         <div className="flex h-full items-center justify-center bg-slate-100 text-sm text-slate-500">
           Open a file to see its preview.
         </div>
       ),
-    [project.id, activePath, source, files, mode, cursorLine, onJumpToSource],
+    [
+      project.id,
+      activePath,
+      source,
+      files,
+      mode,
+      cursorLine,
+      onJumpToSource,
+      autoBuild,
+      buildRequest,
+    ],
   );
 
   return (
     <div className="flex h-screen flex-col">
       <Header
-        title={project.title}
+        title={title}
         activePath={activePath}
+        mainFile={mainFile}
         mode={mode}
         onModeChange={setMode}
         onShare={() => setShareOpen(true)}
@@ -263,6 +346,14 @@ export function WorkspacePage({ project, onBack }: WorkspacePageProps): React.Re
         errorCount={errors.length}
         status={status}
         onBack={onBack}
+        onBuild={() => setBuildRequest((count) => count + 1)}
+        autoBuild={autoBuild}
+        onAutoBuildChange={setAutoBuild}
+        onRename={(next) => {
+          void onRename(next).catch(() => {
+            // The error is shown above.
+          });
+        }}
       />
 
       {error ? (
@@ -278,7 +369,13 @@ export function WorkspacePage({ project, onBack }: WorkspacePageProps): React.Re
               <FileTree
                 projectId={project.id}
                 activePath={activePath}
+                mainFile={mainFile}
                 onSelect={onSelect}
+                onSetMainFile={(path) => {
+                  void onSetMainFile(path).catch(() => {
+                    // The error is shown above.
+                  });
+                }}
               />
             }
             center={

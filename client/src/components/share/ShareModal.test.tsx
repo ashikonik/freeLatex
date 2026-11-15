@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import { ShareModal } from './ShareModal.js';
 
@@ -136,12 +136,24 @@ describe('the share links of a project', () => {
     expect(createShareToken).not.toHaveBeenCalled();
   });
 
-  it('closes when the reader presses Escape', () => {
+  it('closes when the reader presses Escape', async () => {
     const onClose = vi.fn();
 
     render(<ShareModal projectId="prj_1" onClose={onClose} />);
 
-    fireEvent.keyDown(document, { key: 'Escape' });
+    // The modal reads the existing links when it opens, and that answer
+    // arrives after the test body has finished. The wait lets it land
+    // before the key is pressed, so the state changes it causes are
+    // inside React's own event handling.
+    await waitFor(() => expect(listShareTokens).toHaveBeenCalled());
+
+    // The key is handled by a listener on the document rather than on the
+    // modal, so the state change it causes is outside React's own event
+    // handling. The wrapper tells React that the change is expected, which
+    // is what keeps the assertion honest.
+    act(() => {
+      fireEvent.keyDown(document, { key: 'Escape' });
+    });
 
     expect(onClose).toHaveBeenCalled();
   });

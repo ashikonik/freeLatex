@@ -44,7 +44,13 @@ function Shell(): React.ReactElement {
   }
 
   if (project) {
-    return <WorkspacePage project={project} onBack={() => setProject(undefined)} />;
+    return (
+      <WorkspacePage
+        project={project}
+        onBack={() => setProject(undefined)}
+        onProjectChange={setProject}
+      />
+    );
   }
 
   // A reader who arrived through a share link is a guest of one project, and

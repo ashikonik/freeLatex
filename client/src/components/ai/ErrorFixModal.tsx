@@ -1,13 +1,13 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
-import { askAi } from '../../lib/api.js';
+import { askAi, type CompileError } from '../../lib/api.js';
 import { useEscapeToClose } from '../use-modal.js';
 import { boundSource, readAiSettings } from './ai-settings.js';
 
 /** The properties of the error-fixing dialog. */
 export interface ErrorFixModalProps {
   /** The errors the compiler reported. */
-  errors: string[];
+  errors: CompileError[];
   /** The source the errors came from. */
   source: string;
   /** Called when the reader accepts the fix. */
@@ -37,6 +37,10 @@ export function ErrorFixModal({
 
   useEscapeToClose(onClose);
 
+  // The diagnostics are shown and sent as text, each on its own line and
+  // with the place it was found in, so the assistant knows where to look.
+  const described = useMemo(() => describeErrors(errors), [errors]);
+
   const fix = useCallback(async (): Promise<void> => {
     const settings = readAiSettings();
     if (!settings?.apiKey) {
@@ -63,7 +67,7 @@ export function ErrorFixModal({
           'Change nothing else about it.',
         ].join(' '),
         source: trimmed,
-        errors,
+        errors: described,
       });
       setFixed(text);
     } catch (cause) {
@@ -71,7 +75,7 @@ export function ErrorFixModal({
     } finally {
       setWorking(false);
     }
-  }, [errors, source]);
+  }, [described, source]);
 
   return (
     <div
@@ -105,7 +109,7 @@ export function ErrorFixModal({
             {errors.length} error{errors.length === 1 ? '' : 's'}
           </h3>
           <pre className="mb-4 max-h-40 overflow-auto rounded bg-red-50 p-2 text-xs text-red-800">
-            {errors.join('\n\n')}
+            {described.join('\n\n')}
           </pre>
 
           {error ? (
@@ -162,4 +166,19 @@ export function ErrorFixModal({
       </div>
     </div>
   );
+}
+
+/**
+ * The diagnostics as lines of text.
+ *
+ * Each line names the place the diagnostic was found, because a message on
+ * its own does not tell the assistant where to look.
+ */
+export function describeErrors(errors: CompileError[]): string[] {
+  return errors.map((diagnostic) => {
+    const where = diagnostic.file
+      ? `${diagnostic.file}${diagnostic.line ? `:${diagnostic.line}` : ''}: `
+      : '';
+    return `${where}${diagnostic.message}`;
+  });
 }

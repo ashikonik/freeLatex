@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { CompilerClient, type CompilerFile } from '../../compiler/compiler-client.js';
-import { compileProject, forwardSearch, inverseSearch } from '../../lib/api.js';
+import {
+  CompileFailedError,
+  compileProject,
+  forwardSearch,
+  inverseSearch,
+  type CompileError,
+} from '../../lib/api.js';
 import { PDFViewer, type RenderedPage } from './PDFViewer.js';
 import { SyncTeXOverlay, useForwardSync } from './SyncTeXOverlay.js';
 import {
@@ -28,7 +34,23 @@ export interface PreviewPanelProps {
   /** Called when the reader clicks a spot on the page. */
   onJumpToSource: (file: string, line: number) => void;
   /** Called with the errors of the last build. */
-  onErrors?: (errors: string[]) => void;
+  onErrors?: (errors: CompileError[]) => void;
+  /**
+   * Whether the document is rebuilt whenever it changes.
+   *
+   * When this is false the build waits for the reader to ask for it, which is
+   * what a large document or a slow machine needs.
+   */
+  autoBuild: boolean;
+  /**
+   * A counter of the reader's build requests.
+   *
+   * Each time the counter changes the document is built at once. A counter
+   * rather than a callback because the button that asks for the build lives
+   * in the header, above this panel, and the two do not share a parent that
+   * could hold a function.
+   */
+  buildRequest: number;
 }
 
 /** The gap between two pages, in CSS pixels. */
@@ -50,9 +72,13 @@ export function PreviewPanel({
   cursorLine,
   onJumpToSource,
   onErrors,
+  autoBuild,
+  buildRequest,
 }: PreviewPanelProps): React.ReactElement {
   const [pdf, setPdf] = useState<ArrayBuffer | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
+  /** The diagnostics of the last build, shown one by one. */
+  const [diagnostics, setDiagnostics] = useState<CompileError[]>([]);
   const [building, setBuilding] = useState(false);
   const [zoom, setZoom] = useState(1);
   /** The size of each rendered page, so the overlay can be placed on it. */
@@ -93,14 +119,20 @@ export function PreviewPanel({
         }
         if (!outcome.success || !outcome.pdf) {
           if (mounted.current) {
-            setError(outcome.errors.join('\n') || 'The compilation failed.');
-            onErrors?.(outcome.errors);
+            // The WebAssembly engine reports plain strings, so they are shown
+            // as they are rather than as a diagnostic with a position.
+            const lines = outcome.errors.map((message) => ({ severity: 'error' as const, message }));
+            setDiagnostics(lines);
+            setError(lines.length > 0 ? undefined : 'The compilation failed.');
+            onErrors?.(lines);
           }
           return;
         }
         if (mounted.current) {
           setPdf(outcome.pdf);
-          onErrors?.(outcome.errors);
+          setDiagnostics([]);
+          setError(undefined);
+          onErrors?.([]);
         }
         return;
       }
@@ -108,11 +140,23 @@ export function PreviewPanel({
       const bytes = await compileProject(projectId, mainPath);
       if (mounted.current) {
         setPdf(bytes);
+        setDiagnostics([]);
+        setError(undefined);
         onErrors?.([]);
       }
     } catch (cause) {
       if (mounted.current) {
-        setError(cause instanceof Error ? cause.message : 'The compilation failed.');
+        if (cause instanceof CompileFailedError) {
+          // The compiler's own diagnostics: the file, the line and what went
+          // wrong. This is the answer the reader needs.
+          setDiagnostics(cause.errors);
+          setError(cause.errors.length > 0 ? undefined : cause.message);
+          onErrors?.(cause.errors);
+        } else {
+          setDiagnostics([]);
+          setError(cause instanceof Error ? cause.message : 'The compilation failed.');
+          onErrors?.([]);
+        }
       }
     } finally {
       if (mounted.current) {
@@ -123,14 +167,31 @@ export function PreviewPanel({
 
   // The preview is rebuilt whenever the document changes. The delay keeps a
   // burst of keystrokes from starting a build for every one of them.
+  //
+  // When the reader has turned the automatic build off, the document waits
+  // for the Build button instead.
   useEffect(() => {
+    if (!autoBuild) {
+      return;
+    }
     const timer = setTimeout(() => {
       void build();
     }, 800);
     return () => {
       clearTimeout(timer);
     };
-  }, [build]);
+  }, [autoBuild, build]);
+
+  // The reader's own request for a build. The counter comes from the header,
+  // so the build happens at once rather than after the debounce.
+  const lastRequest = useRef(buildRequest);
+  useEffect(() => {
+    if (buildRequest === lastRequest.current) {
+      return;
+    }
+    lastRequest.current = buildRequest;
+    void build();
+  }, [buildRequest, build]);
 
   const onPageMetrics = useCallback((page: number, page_metrics: RenderedPage): void => {
     setMetrics((current) => {
@@ -242,13 +303,32 @@ export function PreviewPanel({
         </p>
       ) : null}
 
-      {error ? (
-        <pre
+      {diagnostics.length > 0 ? (
+        <ul
           role="alert"
+          data-testid="compile-errors"
+          className="max-h-40 space-y-1 overflow-auto border-b border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"
+        >
+          {diagnostics.map((diagnostic, index) => (
+            <li key={`${diagnostic.file ?? ''}:${diagnostic.line ?? index}:${index}`}>
+              {diagnostic.file ? (
+                <span className="font-medium">
+                  {diagnostic.file}
+                  {diagnostic.line ? `:${diagnostic.line}` : ''}:{' '}
+                </span>
+              ) : null}
+              <span>{diagnostic.message}</span>
+            </li>
+          ))}
+        </ul>
+      ) : error ? (
+        <p
+          role="alert"
+          data-testid="compile-error"
           className="max-h-40 overflow-auto border-b border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"
         >
           {error}
-        </pre>
+        </p>
       ) : null}
 
       <div className="relative min-h-0 flex-1">

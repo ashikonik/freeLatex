@@ -17,6 +17,9 @@
     "dev:server": "npm run dev --prefix server",
     "dev:client": "npm run dev --prefix client",
     "probe:share": "node scripts/share-probe.mjs",
+    "probe:biber": "node scripts/biber-probe.mjs",
+    "probe:tunnel": "sh scripts/tunnel-probe.sh",
+    "share:public": "sh scripts/share-public.sh",
     "docker:build": "docker build -f docker/Dockerfile -t freelatex:latest .",
     "docker:build:small": "docker build -f docker/Dockerfile --build-arg WITH_WASM=false -t freelatex:nowasm ."
   }

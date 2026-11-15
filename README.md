@@ -14,6 +14,9 @@
 - **Hybrid Compilation Engine**:
   - **Client-Side WebAssembly**: Instant in-browser compilation with zero server latency.
   - **Server-Side Tectonic**: Full CTAN package support, BibTeX citations, and high-performance compilation from a single container (see [Docker](#3-docker-deployment) for the image sizes).
+  - **Bibliographies That Work**: `biblatex` documents are built with `biber`, and a failed build says which file and which line went wrong rather than "the request failed".
+- **Builds You Invoke**: The **Build** button compiles on demand; the **Auto** toggle decides whether an edit compiles by itself. A failed build keeps the last good PDF on screen and lists the errors.
+- **A Project Names Its Own Entry Point**: The main file is set in the interface and stored with the project, so your preview and your co-editor's preview are the same document.
 - **Bidirectional SyncTeX**: Jump from LaTeX code directly to the corresponding PDF element, or double-click the PDF to jump back to the exact source line.
 - **LetX AI Assistant (BYOK)**:
   - Bring your own API key (Gemini, OpenAI, Anthropic).
@@ -92,8 +95,14 @@ To build a smaller image without the in-browser preview:
 ```bash
 docker build -f docker/Dockerfile --build-arg WITH_WASM=false -t freelatex .
 ```
-That image skips the BusyTeX WebAssembly assets (727 MB), weighs 566 MB
-instead of 1.82 GB, and offers the **🖥️ Server Tectonic Build** mode only.
+That image skips the BusyTeX WebAssembly assets (727 MB), weighs 775 MB
+instead of 2.03 GB, and offers the **🖥️ Server Tectonic Build** mode only.
+
+The image also carries `biber`, the bibliography engine for `biblatex`
+documents. It is what makes a `biblatex` project build on the server rather
+than fail with a TeX error about a file that was never written. Leave it out
+with `--build-arg WITH_BIBER=false` if the deployment only builds classic
+BibTeX documents; that image weighs 623 MB.
 
 ### 4. Frontend
 ```bash
@@ -132,6 +141,30 @@ have their own projects rather than access to one of yours.
 
 For a small group working on one document, the share link is the simpler
 choice.
+
+#### Sharing from your own machine
+
+A share link does not need a cloud service. The link is a URL, and any URL a
+co-editor's browser can reach will do — including one that points at your own
+machine over the public internet.
+
+[cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+offers a *quick tunnel*: no account, no card, no configuration.
+
+```sh
+npm run share:public
+```
+
+That builds the client, starts the server with `STATIC_DIR` set — without it
+the deep link answers 404 instead of the application — and opens the tunnel,
+which prints a public HTTPS address. Mint the share link afterwards and send
+it.
+
+The address changes every time the tunnel is restarted, and it stops
+answering when your machine sleeps. That is the trade for not having to set
+up a server: a document you care about deserves
+[docker/DEPLOY.md](docker/DEPLOY.md), which walks through a free tier that
+keeps its address.
 
 ---
 

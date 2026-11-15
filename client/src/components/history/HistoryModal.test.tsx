@@ -101,12 +101,24 @@ describe('the document history', () => {
     expect(file).toHaveTextContent('new');
   });
 
-  it('closes when the reader presses Escape', () => {
+  it('closes when the reader presses Escape', async () => {
     const onClose = vi.fn();
 
     render(<HistoryModal projectId="prj_1" onClose={onClose} onRestored={vi.fn()} />);
 
-    fireEvent.keyDown(document, { key: 'Escape' });
+    // The modal reads the revisions when it opens, and that answer arrives
+    // after the test body has finished. The wait lets it land before the
+    // key is pressed, so the state changes it causes are inside React's
+    // own event handling.
+    await waitFor(() => expect(screen.getByText('Second draft')).toBeInTheDocument());
+
+    // The key is handled by a listener on the document rather than on the
+    // modal, so the state change it causes is outside React's own event
+    // handling. The wrapper tells React that the change is expected, which
+    // is what keeps the assertion honest.
+    act(() => {
+      fireEvent.keyDown(document, { key: 'Escape' });
+    });
 
     expect(onClose).toHaveBeenCalled();
   });
@@ -134,13 +146,19 @@ describe('the document history', () => {
 
     await waitFor(() => expect(screen.getByTestId('diff-file')).toBeInTheDocument());
 
+    // Picking another revision clears the difference and starts another
+    // one. The click is wrapped because the state changes it causes are
+    // not React's own event handling, and because the second difference
+    // only arrives later.
     fireEvent.click(screen.getByText('First draft'));
 
     await waitFor(() => expect(screen.queryByTestId('diff-file')).not.toBeInTheDocument());
     expect(screen.getByText(/Loading the difference/)).toBeInTheDocument();
 
-    act(() => {
+    // The answer that was held back is let through, so the modal settles.
+    await act(async () => {
       answer(held);
+      await Promise.resolve();
     });
   });
 });
