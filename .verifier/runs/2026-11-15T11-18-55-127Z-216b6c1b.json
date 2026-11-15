@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "id": "2026-11-15T11-18-55-127Z-216b6c1b",
+  "check": "typecheck",
+  "argv": [
+    "npm",
+    "run",
+    "typecheck"
+  ],
+  "source": "package.json",
+  "root": "/home/biloi/Projects/freeLatex",
+  "exit_code": 0,
+  "signal": null,
+  "passed": true,
+  "output": "npm notice run freelatex@0.1.0 typecheck\nnpm notice run npm run typecheck --prefix server && npm run typecheck --prefix client\nnpm notice run freelatex-server@0.1.0 typecheck\nnpm notice run tsc --noEmit\nnpm notice run freelatex-client@0.1.0 typecheck\nnpm notice run tsc --noEmit\n",
+  "output_truncated": false,
+  "touched": [],
+  "commit": "9c8fa52720ccd3bcfd27c72e3fb764b5ce176133",
+  "branch": "main",
+  "started_at": "2026-11-15T11:18:55.127Z",
+  "duration_ms": 6799,
+  "digest": "3ffc36bb340131fc271fc3fe50cd7669615de1f7c34bbbea709a3812c406bd4b"
+}
