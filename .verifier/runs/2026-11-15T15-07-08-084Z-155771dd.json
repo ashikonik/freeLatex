@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "id": "2026-11-15T15-07-08-084Z-155771dd",
+  "check": "typecheck",
+  "argv": [
+    "npm",
+    "run",
+    "typecheck"
+  ],
+  "source": "package.json",
+  "root": "/home/biloi/Projects/freeLatex",
+  "exit_code": 0,
+  "signal": null,
+  "passed": true,
+  "output": "npm notice run freelatex@0.1.0 typecheck\nnpm notice run npm run typecheck --prefix server && npm run typecheck --prefix client\nnpm notice run freelatex-server@0.1.0 typecheck\nnpm notice run tsc --noEmit\nnpm notice run freelatex-client@0.1.0 typecheck\nnpm notice run tsc --noEmit\n",
+  "output_truncated": false,
+  "touched": [],
+  "commit": "1ed60666d990c966f772229f5c6d3a356d60b314",
+  "branch": "feature/step-13-usable-editor",
+  "started_at": "2026-11-15T15:07:08.084Z",
+  "duration_ms": 5582,
+  "digest": "abb19c5826e5514161e0a2eaae0ef64ea647f2afcf72eb98ebf048f2e3a90cc0"
+}

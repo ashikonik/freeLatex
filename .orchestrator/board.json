@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "freeLatex",
-  "updated_at": "2026-11-07T12:30:04Z",
+  "updated_at": "2026-11-15T15:09:17Z",
   "tasks": [
     {
       "id": "T-001",
@@ -123,6 +123,32 @@
           "note": "Share links work end to end: client deep link, bearer share token, runtime probe. PR #1."
         }
       ]
+    },
+    {
+      "id": "T-004",
+      "title": "Step 13: a usable editor, and bibliographies that build",
+      "body": "Make the editor usable and make biblatex documents build.\n\nThe reader was told \"the request failed\" where a TeX error was available, the build ran when nobody asked for it, the main file was a guess, the project could not be renamed, and a biblatex document never built.\n\nDone:\n- The client shows the compile error, with the file and the line.\n- The build is a button the reader presses, with an automatic toggle.\n- The main file is set in the interface and stored with the project, and an imported project has its entry point detected.\n- A project can be renamed.\n- The ACM sample's .bib is repaired (duplicate entries, accent convention).\n- The server is biber-capable, with the version pairing pinned and proved at build time.\n- Sharing works over the public internet through a cloudflared quick tunnel; npm run share:public.\n\nVerified: typecheck clean, 493 tests passing, build green, both docker biblatex gates pass, the running container compiles a biblatex document, 16/16 share checks, and the public tunnel serves the deep link, the API and the collaboration socket.\n\nPR #2.",
+      "state": "done",
+      "labels": [
+        "step-13",
+        "delivery"
+      ],
+      "assignee": null,
+      "blocked_by": [],
+      "branch": "feature/step-13-usable-editor",
+      "created_at": "2026-11-15T15:09:17Z",
+      "updated_at": "2026-11-15T15:09:17Z",
+      "history": [
+        {
+          "at": "2026-11-15T15:09:17Z",
+          "from": null,
+          "to": "done",
+          "actor": "orchestrator",
+          "note": "created"
+        }
+      ],
+      "parent": null,
+      "locks": []
     }
   ]
 }
