@@ -1,0 +1,23 @@
+{
+  "name": "freelatex",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "freeLatex — a self-hostable collaborative LaTeX workspace",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "npm run test --prefix server && npm run test --prefix client",
+    "typecheck": "npm run typecheck --prefix server && npm run typecheck --prefix client",
+    "build": "npm run build --prefix server && npm run build --prefix client",
+    "lint": "npm run typecheck",
+    "install:all": "npm install --prefix server && npm install --prefix client",
+    "dev:server": "npm run dev --prefix server",
+    "dev:client": "npm run dev --prefix client",
+    "probe:share": "node scripts/share-probe.mjs",
+    "docker:build": "docker build -f docker/Dockerfile -t freelatex:latest .",
+    "docker:build:small": "docker build -f docker/Dockerfile --build-arg WITH_WASM=false -t freelatex:nowasm ."
+  }
+}
